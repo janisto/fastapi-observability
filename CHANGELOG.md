@@ -7,6 +7,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-13
+
+### Changed
+
+- Expanded package discovery metadata; runtime behavior and the public API are
+  unchanged.
+
+### Internal
+
+- Updated GitHub issue templates for clearer maintainer triage.
+
 ## [0.1.0] - 2026-07-13
 
 ### Added
@@ -24,5 +35,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Full W3C `tracestate` validation and Google Cloud's preferred raw trace-ID
   correlation format.
 
-[Unreleased]: https://github.com/janisto/fastapi-observability/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/janisto/fastapi-observability/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/janisto/fastapi-observability/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/janisto/fastapi-observability/releases/tag/v0.1.0
