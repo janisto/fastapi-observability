@@ -18,7 +18,8 @@ control of recovery, handlers, and deployment policy.
 uv add fastapi-request-observability
 ```
 
-Python 3.10 or newer and FastAPI 0.135.3 or newer are supported.
+Python 3.13 or newer and FastAPI 0.135.3 or newer are supported. The Python
+compatibility window follows the latest two stable feature releases.
 
 ## Minimal setup
 

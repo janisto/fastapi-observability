@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from ._context import RequestContext, current_request_context
 
 
-class LoggingPreset(str, Enum):
+class LoggingPreset(StrEnum):
     """Provider-compatible JSON field presets."""
 
     DEFAULT = "default"
@@ -113,7 +113,7 @@ class JSONFormatter(logging.Formatter):
 
 
 def _timestamp(created: float) -> str:
-    return datetime.fromtimestamp(created, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return datetime.fromtimestamp(created, UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _context_fields(

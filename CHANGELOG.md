@@ -17,8 +17,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - One structured access record for normal, handled-error, exception, and
   streaming response paths.
 - FastAPI route-template and explicit-operation-ID fields.
-- Python 3.10–3.14 CI, typed package metadata, isolated artifact smoke tests,
-  and PyPI trusted-publishing automation.
+- Python 3.13-or-newer package metadata, Python 3.13–3.14 CI, typed package
+  metadata, isolated artifact smoke tests, and PyPI trusted-publishing
+  automation.
 - Full W3C `tracestate` validation and fully qualified Google Cloud trace
   resources when an explicit GCP project ID is configured.
 

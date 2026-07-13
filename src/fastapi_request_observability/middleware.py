@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
-from typing import Any, TypeAlias
+from typing import Any
 
 from ._context import (
     RequestContext,
@@ -18,11 +18,11 @@ from ._context import (
     current_request_context,
 )
 
-_Scope: TypeAlias = MutableMapping[str, Any]
-_Message: TypeAlias = MutableMapping[str, Any]
-_Receive: TypeAlias = Callable[[], Awaitable[_Message]]
-_Send: TypeAlias = Callable[[_Message], Awaitable[None]]
-_ASGIApp: TypeAlias = Callable[[_Scope, _Receive, _Send], Awaitable[None]]
+type _Scope = MutableMapping[str, Any]
+type _Message = MutableMapping[str, Any]
+type _Receive = Callable[[], Awaitable[_Message]]
+type _Send = Callable[[_Message], Awaitable[None]]
+type _ASGIApp = Callable[[_Scope, _Receive, _Send], Awaitable[None]]
 _SCOPE_CONTEXT_KEY = "fastapi_request_observability.request_context"
 _MISSING = object()
 _HEADER_NAME_CHARACTERS = frozenset("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")

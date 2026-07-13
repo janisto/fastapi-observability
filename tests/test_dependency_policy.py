@@ -3,6 +3,8 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
+FULL_ACTION_VERSION = re.compile(r"^[^@\s]+@v\d+\.\d+\.\d+$")
+USES_CLAUSE = re.compile(r"^\s*uses:\s*([^\s#]+)")
 
 
 def test_legacy_httpx_cannot_reenter_repository_dependencies_or_tests():
@@ -29,3 +31,17 @@ def test_legacy_httpx_cannot_reenter_repository_dependencies_or_tests():
                     imported_root = (node.module or "").partition(".")[0]
                     assert imported_root != legacy_name, path
                     assert node.module not in framework_test_clients, path
+
+
+def test_external_github_actions_use_full_release_version_tags():
+    for workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+        for line_number, line in enumerate(workflow.read_text().splitlines(), start=1):
+            match = USES_CLAUSE.match(line)
+            if match is None:
+                continue
+            action = match.group(1)
+            if action.startswith("./"):
+                continue
+            assert FULL_ACTION_VERSION.fullmatch(action), (
+                f"{workflow.relative_to(ROOT)}:{line_number}: external actions must use @vMAJOR.MINOR.PATCH"
+            )

@@ -3,7 +3,7 @@ name = "fastapi-request-observability"
 version = "0.1.0"
 description = "FastAPI middleware for request IDs, trace correlation, and structured access logs"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Jani Mikkonen" }]
@@ -12,9 +12,6 @@ classifiers = [
     "Framework :: FastAPI",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
@@ -43,7 +40,7 @@ dev = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["ANN", "ASYNC", "B", "BLE", "C4", "DTZ", "E", "F", "I", "LOG", "PERF", "PIE", "PT", "RET", "RUF", "S", "SIM", "T20", "TRY", "UP", "W"]
