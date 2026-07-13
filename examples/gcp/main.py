@@ -1,7 +1,6 @@
-"""Runnable Google Cloud FastAPI application."""
+"""Minimal Google Cloud FastAPI application."""
 
 import logging
-import os
 
 from fastapi import FastAPI
 
@@ -13,55 +12,26 @@ from fastapi_request_observability import (
     RequestContextMiddleware,
 )
 
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter(LoggingPreset.GCP))
+root_logger = logging.getLogger()
+root_logger.handlers.clear()
+root_logger.addHandler(handler)
+root_logger.setLevel(logging.INFO)
 
-def env_or_default(name: str, fallback: str) -> str:
-    """Return a non-empty environment value or its fallback."""
-    return os.getenv(name) or fallback
-
-
-def project_fields() -> dict[str, str]:
-    """Return stable fields shared by application and access logs."""
-    return {
-        "service": env_or_default("SERVICE_NAME", "fastapi-example"),
-        "environment": env_or_default("SERVICE_ENV", "local"),
-        "version": env_or_default("SERVICE_VERSION", "dev"),
-        "cloud_provider": "gcp",
-        "cloud_location": os.getenv("GOOGLE_CLOUD_LOCATION", ""),
-    }
-
-
-def configure_logging() -> None:
-    """Configure Google Cloud-compatible JSON logging."""
-    handler = logging.StreamHandler()
-    handler.setFormatter(JSONFormatter(LoggingPreset.GCP))
-    root_logger = logging.getLogger()
-    root_logger.handlers.clear()
-    root_logger.addHandler(handler)
-    root_logger.setLevel(logging.INFO)
+app = FastAPI()
+app.add_middleware(
+    AccessLogMiddleware,
+    config=AccessLogConfig(
+        logger=logging.getLogger("http.access"),
+        preset=LoggingPreset.GCP,
+    ),
+)
+app.add_middleware(RequestContextMiddleware)
 
 
-def create_app() -> FastAPI:
-    """Create the example application."""
-    configure_logging()
-    logger = logging.LoggerAdapter(logging.getLogger(__name__), project_fields(), merge_extra=True)
-    fastapi_app = FastAPI()
-    fastapi_app.add_middleware(
-        AccessLogMiddleware,
-        config=AccessLogConfig(
-            logger=logging.getLogger("http.access"),
-            preset=LoggingPreset.GCP,
-            extra_fields=lambda _scope: project_fields(),
-        ),
-    )
-    fastapi_app.add_middleware(RequestContextMiddleware)
-
-    @fastapi_app.get("/health", operation_id="health_check")
-    async def health() -> dict[str, bool]:
-        """Return service health."""
-        logger.info("health check", extra={"component": "health"})
-        return {"ok": True}
-
-    return fastapi_app
-
-
-app = create_app()
+@app.get("/health", operation_id="health_check")
+async def health() -> dict[str, bool]:
+    """Return service health."""
+    logging.getLogger(__name__).info("health check")
+    return {"ok": True}

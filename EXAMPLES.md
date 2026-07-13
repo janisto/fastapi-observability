@@ -13,18 +13,16 @@ example. The other runnable applications remain first-class and tested.
 | [`examples/basic`](examples/basic) | Generic JSON for local or provider-neutral pipelines. |
 | [`examples/aws`](examples/aws) | CloudWatch-friendly JSON and a derived X-Ray trace ID. |
 | [`examples/azure`](examples/azure) | Azure Monitor and Application Insights operation fields. |
-| [`examples/local_wrapper/applog.py`](examples/local_wrapper/applog.py) | Optional application-local logging helpers. |
 
 ## Core wiring
 
 Every service follows the same shape:
 
 1. Configure one `JSONFormatter` preset on the application handlers.
-2. Attach stable service fields to application and access records.
-3. Add access logging first and request context second. FastAPI applies the
+2. Add access logging first and request context second. FastAPI applies the
    last-added middleware first, so request context remains active while the
    access record is emitted.
-4. Use ordinary `logging` calls in handlers and services.
+3. Use ordinary `logging` calls in handlers and services.
 
 The canonical GCP wiring is:
 
@@ -43,13 +41,6 @@ app.add_middleware(
     config=AccessLogConfig(
         logger=logging.getLogger("http.access"),
         preset=LoggingPreset.GCP,
-        extra_fields=lambda _scope: {
-            "service": "example-api",
-            "environment": "production",
-            "version": "v0.1.0",
-            "cloud_provider": "gcp",
-            "cloud_location": "europe-north1",
-        },
     ),
 )
 app.add_middleware(RequestContextMiddleware)
@@ -58,29 +49,9 @@ app.add_middleware(RequestContextMiddleware)
 No Google Cloud project ID is required. With valid W3C context,
 `logging.googleapis.com/trace` contains the raw trace ID.
 
-## Shared environment fields
-
-The runnable examples use stable field names across providers:
-
-| Variable | Log field | Example |
-| --- | --- | --- |
-| `SERVICE_NAME` | `service` | `example-api` |
-| `SERVICE_ENV` | `environment` | `local`, `staging`, `production` |
-| `SERVICE_VERSION` | `version` | release tag, image tag, or commit SHA |
-| provider location variable | `cloud_location` or `cloud_region` | `europe-north1` |
-
-The route logger uses `logging.LoggerAdapter` for these fields. The access
-configuration uses `extra_fields` so application and access records share the
-same stable metadata. Do not put secrets, credentials, request bodies,
-authorization headers, cookies, or unbounded user input in these fields.
-
 ## Run the canonical GCP example
 
 ```bash
-SERVICE_NAME=fastapi-example \
-SERVICE_ENV=local \
-SERVICE_VERSION=dev \
-GOOGLE_CLOUD_LOCATION=europe-north1 \
 uv run uvicorn examples.gcp.main:app --no-access-log
 ```
 
@@ -95,9 +66,9 @@ curl -i \
 ```
 
 The request ID remains `demo-123`; `correlation_id` becomes the W3C trace ID.
-The handler and access records contain the same correlation and stable service
-fields. The access record also contains `httpRequest`, `/health` as the route
-template, and `health_check` as the explicit operation ID.
+The handler and access records contain the same correlation fields. The access
+record also contains `httpRequest`, `/health` as the route template, and
+`health_check` as the explicit operation ID.
 
 Representative GCP fields:
 
@@ -120,7 +91,6 @@ provider-specific trace aliases.
 ## AWS
 
 ```bash
-AWS_REGION=eu-north-1 \
 uv run uvicorn examples.aws.main:app --no-access-log
 ```
 
@@ -132,8 +102,6 @@ segments or parse `X-Amzn-Trace-Id`.
 ## Azure
 
 ```bash
-AZURE_REGION=northeurope \
-AZURE_RESOURCE_GROUP=example-rg \
 uv run uvicorn examples.azure.main:app --no-access-log
 ```
 
@@ -141,30 +109,11 @@ The Azure preset maps valid W3C values to `operation_Id` and
 `operation_ParentId`. It does not initialize an Azure SDK or parse legacy
 `Request-Id` headers.
 
-## Optional local wrapper
-
-[`examples/local_wrapper/applog.py`](examples/local_wrapper/applog.py) provides
-small `debug`, `info`, `warning`, `error`, and arbitrary-level helpers around
-standard-library logging. It does not replace the package API. Because
-`JSONFormatter` reads request metadata from the current `ContextVar`, helper
-calls retain the same request ID and trace correlation without accepting a
-request object or context parameter.
-
-```python
-from examples.local_wrapper import applog
-
-applog.info("loading item", item_id=item_id)
-applog.error("item load failed", error, item_id=item_id)
-```
-
-The runnable-example tests verify all four applications and prove that the
-local wrapper preserves request metadata, structured fields, levels, and
-exception information.
-
 ## Per-project checklist
 
 - Use Python 3.13 or newer.
 - Use GCP when documentation needs one representative configuration.
+- Keep runnable examples limited to required package wiring.
 - Use the same preset for `JSONFormatter` and `AccessLogConfig`.
 - Add access middleware before request-context middleware.
 - Group logs by `path_template`, not the concrete request path.
