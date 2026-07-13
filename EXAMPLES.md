@@ -13,6 +13,7 @@ example. The other runnable applications remain first-class and tested.
 | [`examples/basic`](examples/basic) | Generic JSON for local or provider-neutral pipelines. |
 | [`examples/aws`](examples/aws) | CloudWatch-friendly JSON and a derived X-Ray trace ID. |
 | [`examples/azure`](examples/azure) | Azure Monitor and Application Insights operation fields. |
+| [`examples/local_wrapper/applog.py`](examples/local_wrapper/applog.py) | Optional application-local logging helpers. |
 
 ## Core wiring
 
@@ -108,6 +109,25 @@ uv run uvicorn examples.azure.main:app --no-access-log
 The Azure preset maps valid W3C values to `operation_Id` and
 `operation_ParentId`. It does not initialize an Azure SDK or parse legacy
 `Request-Id` headers.
+
+## Optional local wrapper
+
+[`examples/local_wrapper/applog.py`](examples/local_wrapper/applog.py) provides
+small `debug`, `info`, `warning`, `error`, and arbitrary-level helpers around
+standard-library logging. It is a convenience layer, not required package
+configuration. Because `JSONFormatter` reads request metadata from the current
+`ContextVar`, helper calls retain request and trace correlation without
+accepting a request object or context parameter.
+
+```python
+from examples.local_wrapper import applog
+
+applog.info("loading item", item_id=item_id)
+applog.error("item load failed", error, item_id=item_id)
+```
+
+Tests verify that the wrapper preserves request metadata, structured fields,
+levels, and exception information.
 
 ## Per-project checklist
 
