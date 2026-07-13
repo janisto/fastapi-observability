@@ -43,15 +43,27 @@ line-length = 120
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["ANN", "ASYNC", "B", "BLE", "C4", "DTZ", "E", "F", "I", "LOG", "PERF", "PIE", "PT", "RET", "RUF", "S", "SIM", "T20", "TRY", "UP", "W"]
+select = ["ALL"]
 ignore = [
-    "ANN401", # Public callback payloads and JSON values are intentionally Any.
-    "E501",   # Formatting is owned by Ruff.
+    "COM812", # Conflicts with the Ruff formatter.
+    "E501",   # Line length is owned by the Ruff formatter.
+    "EM101",  # Inline exception messages are clearer for validation failures.
+    "EM102",  # Inline formatted exception messages preserve local context.
+    "ISC001", # Conflicts with the Ruff formatter.
     "TRY003", # Public validation and diagnostic messages are clearer inline.
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["ANN", "PLR2004", "S101"]
+"examples/**/*.py" = ["INP001"]
+"src/fastapi_request_observability/access.py" = ["C901", "PLR0915"]
+"src/fastapi_request_observability/trace.py" = ["PLR0911"]
+"tests/**/*.py" = ["ANN", "ARG", "C901", "D", "EM", "PLR2004", "S101", "TRY003"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+max-args = 6
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers"
@@ -67,4 +79,17 @@ skip_covered = true
 fail_under = 90
 
 [tool.ty.src]
-include = ["src", "tests"]
+include = ["examples", "src", "tests"]
+
+[tool.ty.analysis]
+strict-literal-narrowing = true
+
+[tool.ty.environment]
+python-platform = "all"
+python-version = "3.13"
+
+[tool.ty.rules]
+all = "error"
+
+[tool.ty.terminal]
+error-on-warning = true

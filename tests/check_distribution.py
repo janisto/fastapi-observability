@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import email
-import glob
 import tarfile
 import zipfile
 from pathlib import Path
@@ -19,8 +18,8 @@ EXPECTED_URLS = {
     "Changelog, https://github.com/janisto/fastapi-observability/blob/main/CHANGELOG.md",
 }
 
-wheel_paths = glob.glob(str(ROOT / "dist" / "*.whl"))
-sdist_paths = glob.glob(str(ROOT / "dist" / "*.tar.gz"))
+wheel_paths = list((ROOT / "dist").glob("*.whl"))
+sdist_paths = list((ROOT / "dist").glob("*.tar.gz"))
 assert len(wheel_paths) == 1, f"expected one wheel, found {wheel_paths}"
 assert len(sdist_paths) == 1, f"expected one sdist, found {sdist_paths}"
 

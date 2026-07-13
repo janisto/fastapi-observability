@@ -41,6 +41,7 @@ class RequestContextConfig:
     inject_response_header: bool = True
 
     def __post_init__(self) -> None:
+        """Validate headers and callbacks eagerly."""
         _validate_header_name(self.request_id_header, "request_id_header")
         _validate_header_name(self.traceparent_header, "traceparent_header")
         _validate_header_name(self.tracestate_header, "tracestate_header")
@@ -56,10 +57,12 @@ class RequestContextMiddleware:
     """Bind validated correlation metadata to each HTTP request."""
 
     def __init__(self, app: _ASGIApp, config: RequestContextConfig | None = None) -> None:
+        """Initialize the middleware around an ASGI application."""
         self.app = app
         self.config = config or RequestContextConfig()
 
     async def __call__(self, scope: _Scope, receive: _Receive, send: _Send) -> None:
+        """Bind correlation metadata while one ASGI request executes."""
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return

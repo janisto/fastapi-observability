@@ -62,10 +62,10 @@ def test_exception_stacktrace():
     def fail():
         raise ValueError("broken")
 
+    record = _record()
     try:
         fail()
     except ValueError:
-        record = _record()
         record.exc_info = __import__("sys").exc_info()
     parsed = json.loads(JSONFormatter().format(record))
     assert "ValueError: broken" in parsed["stacktrace"]

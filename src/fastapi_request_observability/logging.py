@@ -7,7 +7,7 @@ import logging
 import math
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, override
 
 from ._context import RequestContext, current_request_context
 
@@ -23,6 +23,8 @@ class LoggingPreset(StrEnum):
 
 _STANDARD_RECORD_FIELDS = frozenset(logging.makeLogRecord({}).__dict__)
 _ACCESS_FIELDS_KEY = "_fastapi_request_observability_access_fields"
+_VISIBLE_ASCII_START = 0x21
+_VISIBLE_ASCII_END = 0x7E
 _RESERVED_FIELDS = frozenset(
     {
         _ACCESS_FIELDS_KEY,
@@ -69,11 +71,13 @@ class JSONFormatter(logging.Formatter):
         include_source: bool = False,
         gcp_project_id: str | None = None,
     ) -> None:
+        """Initialize formatting and provider-specific field behavior."""
         super().__init__()
         self.preset = preset
         self.include_source = include_source
         self.gcp_project_id = _validated_gcp_project_id(gcp_project_id)
 
+    @override
     def format(self, record: logging.LogRecord) -> str:
         """Return one compact, valid JSON object."""
         level_field = "severity" if self.preset is LoggingPreset.GCP else "level"
@@ -155,13 +159,13 @@ def _validated_gcp_project_id(value: str | None) -> str | None:
         not value
         or not value.isascii()
         or "/" in value
-        or any(not 0x21 <= ord(character) <= 0x7E for character in value)
+        or any(not _VISIBLE_ASCII_START <= ord(character) <= _VISIBLE_ASCII_END for character in value)
     ):
         raise ValueError("gcp_project_id must be a non-empty visible ASCII project ID without slashes")
     return value
 
 
-def _json_safe(value: Any, seen: set[int] | None = None) -> Any:
+def _json_safe(value: Any, seen: set[int] | None = None) -> Any:  # noqa: ANN401
     if value is None or isinstance(value, (str, bool, int)):
         return value
     if isinstance(value, float):
@@ -182,7 +186,7 @@ def _json_safe(value: Any, seen: set[int] | None = None) -> Any:
         seen.remove(identity)
 
 
-def _json_key(key: Any) -> Any:
+def _json_key(key: Any) -> Any:  # noqa: ANN401
     if key is None or isinstance(key, (str, bool, int)):
         return key
     if isinstance(key, float) and math.isfinite(key):

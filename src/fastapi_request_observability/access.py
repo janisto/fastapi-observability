@@ -41,6 +41,8 @@ from .middleware import (
 StatusLevel = Callable[[int], int]
 ExtraFields = Callable[[_Scope], Mapping[str, Any]]
 Clock = Callable[[], float]
+_CLIENT_ERROR_STATUS = 400
+_SERVER_ERROR_STATUS = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +58,7 @@ class AccessLogConfig:
     gcp_project_id: str | None = None
 
     def __post_init__(self) -> None:
+        """Validate provider-specific configuration eagerly."""
         _validated_gcp_project_id(self.gcp_project_id)
 
 
@@ -63,10 +66,12 @@ class AccessLogMiddleware:
     """Emit exactly one access record after an HTTP response completes."""
 
     def __init__(self, app: _ASGIApp, config: AccessLogConfig | None = None) -> None:
+        """Initialize the middleware around an ASGI application."""
         self.app = app
         self.config = config or AccessLogConfig()
 
     async def __call__(self, scope: _Scope, receive: _Receive, send: _Send) -> None:
+        """Observe one ASGI request and emit its access record."""
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -151,9 +156,9 @@ def _status_level(config: AccessLogConfig, status: int) -> int:
                 "access status-level callback failed",
                 TypeError("status-level callback must return an integer logging level"),
             )
-    if status >= 500:
+    if status >= _SERVER_ERROR_STATUS:
         return logging.ERROR
-    if status >= 400:
+    if status >= _CLIENT_ERROR_STATUS:
         return logging.WARNING
     return logging.INFO
 

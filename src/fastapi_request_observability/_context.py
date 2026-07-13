@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from itertools import count
 from threading import Lock
 
 from .trace import TraceContext, _with_tracestate, parse_traceparent
@@ -16,6 +17,9 @@ from .trace import TraceContext, _with_tracestate, parse_traceparent
 RequestIDGenerator = Callable[[], str]
 RequestIDValidator = Callable[[str], bool]
 Header = tuple[bytes, bytes]
+_MAX_REQUEST_ID_LENGTH = 128
+_VISIBLE_ASCII_START = 0x21
+_VISIBLE_ASCII_END = 0x7E
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +35,7 @@ _request_context: ContextVar[RequestContext | None] = ContextVar(
     "fastapi_request_observability_request_context", default=None
 )
 _fallback_lock = Lock()
-_fallback_counter = 0
+_fallback_counter = count(1)
 
 
 def request_id() -> str | None:
@@ -73,7 +77,7 @@ def _default_request_id() -> str:
 
 
 def _default_validate_request_id(value: str) -> bool:
-    if not 1 <= len(value) <= 128 or not value.isascii():
+    if not 1 <= len(value) <= _MAX_REQUEST_ID_LENGTH or not value.isascii():
         return False
     return all(character.isalnum() or character in "-._~" for character in value)
 
@@ -94,7 +98,9 @@ def _new_valid_request_id(generator: RequestIDGenerator, validator: RequestIDVal
 
 
 def _is_valid(validator: RequestIDValidator, value: str) -> bool:
-    if not value.isascii() or any(not 0x21 <= ord(character) <= 0x7E for character in value):
+    if not value.isascii() or any(
+        not _VISIBLE_ASCII_START <= ord(character) <= _VISIBLE_ASCII_END for character in value
+    ):
         return False
     try:
         return validator(value)
@@ -103,10 +109,9 @@ def _is_valid(validator: RequestIDValidator, value: str) -> bool:
 
 
 def _emergency_request_id() -> str:
-    global _fallback_counter
     with _fallback_lock:
-        _fallback_counter = (_fallback_counter + 1) % (1 << 128)
-        material = f"{time.time_ns()}:{os.getpid()}:{_fallback_counter}".encode()
+        counter = next(_fallback_counter) % (1 << 128)
+        material = f"{time.time_ns()}:{os.getpid()}:{counter}".encode()
         return hashlib.sha256(material).hexdigest()[:32]
 
 

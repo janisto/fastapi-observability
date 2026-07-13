@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from typing import override
 
 import pytest
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -26,11 +27,13 @@ class JSONCaptureHandler(logging.Handler):
         self.entries = []
         self.setFormatter(JSONFormatter(preset, gcp_project_id=gcp_project_id))
 
+    @override
     def emit(self, record):
         self.entries.append(json.loads(self.format(record)))
 
 
 class FailingHandler(logging.Handler):
+    @override
     def emit(self, record):
         raise RuntimeError("logging failed")
 
@@ -40,6 +43,7 @@ class RecordCaptureHandler(logging.Handler):
         super().__init__()
         self.records = []
 
+    @override
     def emit(self, record):
         self.records.append(record)
 
