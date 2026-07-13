@@ -23,7 +23,7 @@ jobs:
       id-token: write # Required for PyPI trusted publishing; no repository token is used.
     steps:
       - name: Check out release tag
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.0
         with:
           ref: ${{ github.event.release.tag_name }}
           fetch-depth: 0
