@@ -1,3 +1,5 @@
+# Justfile for fastapi-request-observability
+# https://github.com/casey/just
 # Development and release checks for fastapi-request-observability.
 
 @_:
