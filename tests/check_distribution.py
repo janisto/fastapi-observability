@@ -12,7 +12,7 @@ ROOT = Path(__file__).parent.parent
 EXPECTED_NAME = "fastapi-request-observability"
 EXPECTED_VERSION = "0.1.0"
 EXPECTED_PYTHON = ">=3.13"
-EXPECTED_DEPENDENCIES = ["fastapi>=0.135.3"]
+EXPECTED_DEPENDENCIES = ["fastapi>=0.139.0"]
 EXPECTED_URLS = {
     "Repository, https://github.com/janisto/fastapi-observability",
     "Issues, https://github.com/janisto/fastapi-observability/issues",
