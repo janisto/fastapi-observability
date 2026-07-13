@@ -1,0 +1,6 @@
+rules:
+  unpinned-uses:
+    config:
+      # Repository policy requires full release tags and is enforced by tests.
+      policies:
+        "*": ref-pin
