@@ -1,73 +1,183 @@
 # Examples
 
-## Runnable basic application
+This guide shows how to wire `fastapi-request-observability` into FastAPI
+services while keeping one log contract across Google Cloud, provider-neutral,
+AWS, and Azure deployments.
 
-[`examples/basic.py`](examples/basic.py) configures standard-library JSON
-logging, both middleware layers, an explicit operation ID, and ordinary module
-logging. Run it with:
+When one configuration is shown, this project uses GCP as the canonical
+example. The other runnable applications remain first-class and tested.
 
-```bash
-uv run uvicorn examples.basic:app --no-access-log
-curl -H 'X-Request-ID: example-request' http://127.0.0.1:8000/items/42
-```
+| Example | Purpose |
+| --- | --- |
+| [`examples/gcp`](examples/gcp) | Canonical Google Cloud Logging field shape. |
+| [`examples/basic`](examples/basic) | Generic JSON for local or provider-neutral pipelines. |
+| [`examples/aws`](examples/aws) | CloudWatch-friendly JSON and a derived X-Ray trace ID. |
+| [`examples/azure`](examples/azure) | Azure Monitor and Application Insights operation fields. |
+| [`examples/local_wrapper/applog.py`](examples/local_wrapper/applog.py) | Optional application-local logging helpers. |
 
-## GCP
+## Core wiring
+
+Every service follows the same shape:
+
+1. Configure one `JSONFormatter` preset on the application handlers.
+2. Attach stable service fields to application and access records.
+3. Add access logging first and request context second. FastAPI applies the
+   last-added middleware first, so request context remains active while the
+   access record is emitted.
+4. Use ordinary `logging` calls in handlers and services.
+
+The canonical GCP wiring is:
 
 ```python
-preset = LoggingPreset.GCP
-gcp_project_id = "example-project"
-handler.setFormatter(JSONFormatter(preset, gcp_project_id=gcp_project_id))
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter(LoggingPreset.GCP))
+
+root_logger = logging.getLogger()
+root_logger.handlers.clear()
+root_logger.addHandler(handler)
+root_logger.setLevel(logging.INFO)
+
+app = FastAPI()
 app.add_middleware(
     AccessLogMiddleware,
     config=AccessLogConfig(
         logger=logging.getLogger("http.access"),
-        preset=preset,
-        gcp_project_id=gcp_project_id,
+        preset=LoggingPreset.GCP,
+        extra_fields=lambda _scope: {
+            "service": "example-api",
+            "environment": "production",
+            "version": "v0.1.0",
+            "cloud_provider": "gcp",
+            "cloud_location": "europe-north1",
+        },
     ),
 )
 app.add_middleware(RequestContextMiddleware)
 ```
 
-This produces GCP `severity`, trace-correlation fields, and `httpRequest`.
-Google Cloud requires `logging.googleapis.com/trace` to be a fully qualified
-`projects/PROJECT_ID/traces/TRACE_ID` resource name for Logs Explorer and Trace
-Viewer correlation, so the project ID is explicit and never guessed. If it is
-omitted, the generic validated `trace_id` remains present but the GCP special
-trace fields are omitted.
+No Google Cloud project ID is required. With valid W3C context,
+`logging.googleapis.com/trace` contains the raw trace ID. Google Cloud made
+that the preferred `LogEntry.trace` format on January 26, 2026; the
+project-qualified resource name is now the legacy format.
+
+## Shared environment fields
+
+The runnable examples use stable field names across providers:
+
+| Variable | Log field | Example |
+| --- | --- | --- |
+| `SERVICE_NAME` | `service` | `example-api` |
+| `SERVICE_ENV` | `environment` | `local`, `staging`, `production` |
+| `SERVICE_VERSION` | `version` | release tag, image tag, or commit SHA |
+| provider location variable | `cloud_location` or `cloud_region` | `europe-north1` |
+
+The route logger uses `logging.LoggerAdapter` for these fields. The access
+configuration uses `extra_fields` so application and access records share the
+same stable metadata. Do not put secrets, credentials, request bodies,
+authorization headers, cookies, or unbounded user input in these fields.
+
+## Run the canonical GCP example
+
+```bash
+SERVICE_NAME=fastapi-example \
+SERVICE_ENV=local \
+SERVICE_VERSION=dev \
+GOOGLE_CLOUD_LOCATION=europe-north1 \
+uv run uvicorn examples.gcp.main:app --no-access-log
+```
+
+Call the health route with request and trace correlation:
+
+```bash
+curl -i \
+  -H 'X-Request-ID: demo-123' \
+  -H 'traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' \
+  -H 'tracestate: vendor=value' \
+  http://127.0.0.1:8000/health
+```
+
+The request ID remains `demo-123`; `correlation_id` becomes the W3C trace ID.
+The handler and access records contain the same correlation and stable service
+fields. The access record also contains `httpRequest`, `/health` as the route
+template, and `health_check` as the explicit operation ID.
+
+Representative GCP fields:
+
+```json
+{"severity":"INFO","message":"request completed","request_id":"demo-123","correlation_id":"4bf92f3577b34da6a3ce929d0e0e4736","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","logging.googleapis.com/trace":"4bf92f3577b34da6a3ce929d0e0e4736","logging.googleapis.com/trace_sampled":true,"method":"GET","path":"/health","path_template":"/health","operation_id":"health_check","status":200}
+```
+
+The package does not create spans and therefore does not manufacture
+`logging.googleapis.com/spanId` from the incoming parent ID.
+
+## Provider-neutral JSON
+
+```bash
+uv run uvicorn examples.basic.main:app --no-access-log
+```
+
+The default preset writes `level` and the generic correlation fields without
+provider-specific trace aliases.
 
 ## AWS
 
-Use `LoggingPreset.AWS` in both places. A valid W3C trace ID such as
-`4bf92f3577b34da6a3ce929d0e0e4736` becomes
-`1-4bf92f35-77b34da6a3ce929d0e0e4736`. This is log correlation only and does not
-create a segment.
+```bash
+AWS_REGION=eu-north-1 \
+uv run uvicorn examples.aws.main:app --no-access-log
+```
+
+The AWS preset keeps flat JSON. A valid W3C trace ID is also formatted as
+`xray_trace_id`, for example
+`1-4bf92f35-77b34da6a3ce929d0e0e4736`. The package does not create X-Ray
+segments or parse `X-Amzn-Trace-Id`.
 
 ## Azure
 
-Use `LoggingPreset.AZURE` in both places. `operation_Id` receives the W3C trace
-ID and `operation_ParentId` receives the incoming parent ID. This is structured
-log metadata, not Application Insights telemetry.
-
-## Custom request header and fields
-
-```python
-from fastapi_request_observability import RequestContextConfig
-
-app.add_middleware(
-    AccessLogMiddleware,
-    config=AccessLogConfig(
-        logger=logging.getLogger("http.access"),
-        extra_fields=lambda scope: {"deployment": "production"},
-    ),
-)
-app.add_middleware(
-    RequestContextMiddleware,
-    config=RequestContextConfig(
-        request_id_header="X-Correlation-ID",
-        response_header="X-Correlation-ID",
-    ),
-)
+```bash
+AZURE_REGION=northeurope \
+AZURE_RESOURCE_GROUP=example-rg \
+uv run uvicorn examples.azure.main:app --no-access-log
 ```
 
-The extra-fields callback is synchronous and should be fast. Reserved package
-or provider keys returned by it are ignored.
+The Azure preset maps valid W3C values to `operation_Id` and
+`operation_ParentId`. It does not initialize an Azure SDK or parse legacy
+`Request-Id` headers.
+
+## Optional local wrapper
+
+[`examples/local_wrapper/applog.py`](examples/local_wrapper/applog.py) provides
+small `debug`, `info`, `warning`, `error`, and arbitrary-level helpers around
+standard-library logging. It does not replace the package API. Because
+`JSONFormatter` reads request metadata from the current `ContextVar`, helper
+calls retain the same request ID and trace correlation without accepting a
+request object or context parameter.
+
+```python
+from examples.local_wrapper import applog
+
+applog.info("loading item", item_id=item_id)
+applog.error("item load failed", error, item_id=item_id)
+```
+
+The runnable-example tests verify all four applications and prove that the
+local wrapper preserves request metadata, structured fields, levels, and
+exception information.
+
+## Per-project checklist
+
+- Use Python 3.13 or newer.
+- Use GCP when documentation needs one representative configuration.
+- Use the same preset for `JSONFormatter` and `AccessLogConfig`.
+- Add access middleware before request-context middleware.
+- Group logs by `path_template`, not the concrete request path.
+- Disable duplicate ASGI-server access logs when this package owns them.
+- Keep provider tracing SDKs separate from this correlation package.
+- Never place secrets or raw bodies in log fields.
+- Run lint, typing, tests, build inspection, and artifact smoke tests.
+
+## References
+
+- [Google Cloud: Link log entries with traces](https://docs.cloud.google.com/trace/docs/trace-log-integration)
+- [Google Cloud Trace release notes](https://docs.cloud.google.com/trace/docs/release-notes)
+- [Google Cloud structured logging](https://docs.cloud.google.com/logging/docs/structured-logging)
+- [W3C Trace Context](https://www.w3.org/TR/trace-context/)

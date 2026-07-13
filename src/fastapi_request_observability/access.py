@@ -20,7 +20,6 @@ from .logging import (
     _RESERVED_FIELDS,
     LoggingPreset,
     _context_fields,
-    _validated_gcp_project_id,
 )
 from .middleware import (
     _MISSING,
@@ -55,11 +54,6 @@ class AccessLogConfig:
     status_level: StatusLevel | None = None
     extra_fields: ExtraFields | None = None
     message: str = "request completed"
-    gcp_project_id: str | None = None
-
-    def __post_init__(self) -> None:
-        """Validate provider-specific configuration eagerly."""
-        _validated_gcp_project_id(self.gcp_project_id)
 
 
 class AccessLogMiddleware:
@@ -101,7 +95,7 @@ class AccessLogMiddleware:
             resolved_status = status if status is not None else (500 if error is not None else 200)
             duration_ms = _duration_ms(clock, start)
             fields = _access_fields(scope, resolved_status, duration_ms, self.config.preset)
-            fields.update(_context_fields(self.config.preset, context, self.config.gcp_project_id))
+            fields.update(_context_fields(self.config.preset, context))
             if error is not None:
                 fields["error"] = _exception_summary(error)
             if self.config.extra_fields is not None:

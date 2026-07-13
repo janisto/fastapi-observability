@@ -79,7 +79,7 @@ def test_exception_stacktrace():
             LoggingPreset.GCP,
             {
                 "severity": "INFO",
-                "logging.googleapis.com/trace": f"projects/example-project/traces/{TRACE_ID}",
+                "logging.googleapis.com/trace": TRACE_ID,
                 "logging.googleapis.com/trace_sampled": True,
             },
         ),
@@ -95,8 +95,7 @@ def test_context_and_provider_shapes(preset, expected):
     assert trace is not None
     token = _bind_context(RequestContext("request-1", TRACE_ID, trace))
     try:
-        project_id = "example-project" if preset is LoggingPreset.GCP else None
-        parsed = json.loads(JSONFormatter(preset, gcp_project_id=project_id).format(_record()))
+        parsed = json.loads(JSONFormatter(preset).format(_record()))
     finally:
         _reset_context(token)
     assert parsed["request_id"] == "request-1"
@@ -109,7 +108,7 @@ def test_context_and_provider_shapes(preset, expected):
     assert "logging.googleapis.com/spanId" not in parsed
 
 
-def test_gcp_trace_resource_is_omitted_without_an_explicit_project_id():
+def test_gcp_trace_uses_preferred_raw_trace_id():
     trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01")
     assert trace is not None
     token = _bind_context(RequestContext("request-1", TRACE_ID, trace))
@@ -118,14 +117,8 @@ def test_gcp_trace_resource_is_omitted_without_an_explicit_project_id():
     finally:
         _reset_context(token)
     assert parsed["trace_id"] == TRACE_ID
-    assert "logging.googleapis.com/trace" not in parsed
-    assert "logging.googleapis.com/trace_sampled" not in parsed
-
-
-@pytest.mark.parametrize("project_id", ["", "bad/project", "bad project", "é"])
-def test_invalid_gcp_project_id_fails_at_formatter_construction(project_id):
-    with pytest.raises(ValueError, match="gcp_project_id"):
-        JSONFormatter(LoggingPreset.GCP, gcp_project_id=project_id)
+    assert parsed["logging.googleapis.com/trace"] == TRACE_ID
+    assert parsed["logging.googleapis.com/trace_sampled"] is True
 
 
 def test_no_context_has_no_correlation_fields():

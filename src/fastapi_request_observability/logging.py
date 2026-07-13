@@ -23,8 +23,6 @@ class LoggingPreset(StrEnum):
 
 _STANDARD_RECORD_FIELDS = frozenset(logging.makeLogRecord({}).__dict__)
 _ACCESS_FIELDS_KEY = "_fastapi_request_observability_access_fields"
-_VISIBLE_ASCII_START = 0x21
-_VISIBLE_ASCII_END = 0x7E
 _RESERVED_FIELDS = frozenset(
     {
         _ACCESS_FIELDS_KEY,
@@ -69,13 +67,11 @@ class JSONFormatter(logging.Formatter):
         preset: LoggingPreset = LoggingPreset.DEFAULT,
         *,
         include_source: bool = False,
-        gcp_project_id: str | None = None,
     ) -> None:
         """Initialize formatting and provider-specific field behavior."""
         super().__init__()
         self.preset = preset
         self.include_source = include_source
-        self.gcp_project_id = _validated_gcp_project_id(gcp_project_id)
 
     @override
     def format(self, record: logging.LogRecord) -> str:
@@ -101,7 +97,7 @@ class JSONFormatter(logging.Formatter):
 
         context = current_request_context()
         if context is not None:
-            data.update(_context_fields(self.preset, context, self.gcp_project_id))
+            data.update(_context_fields(self.preset, context))
 
         # Access records snapshot their request context at emission time. Apply
         # that trusted snapshot after the formatter's live context so deferred
@@ -123,7 +119,6 @@ def _timestamp(created: float) -> str:
 def _context_fields(
     preset: LoggingPreset,
     context: RequestContext,
-    gcp_project_id: str | None = None,
 ) -> dict[str, Any]:
     fields: dict[str, Any] = {
         "request_id": context.request_id,
@@ -141,8 +136,8 @@ def _context_fields(
             "trace_sampled": trace.sampled,
         }
     )
-    if preset is LoggingPreset.GCP and gcp_project_id is not None:
-        fields["logging.googleapis.com/trace"] = f"projects/{gcp_project_id}/traces/{trace.trace_id}"
+    if preset is LoggingPreset.GCP:
+        fields["logging.googleapis.com/trace"] = trace.trace_id
         fields["logging.googleapis.com/trace_sampled"] = trace.sampled
     elif preset is LoggingPreset.AWS:
         fields["xray_trace_id"] = f"1-{trace.trace_id[:8]}-{trace.trace_id[8:]}"
@@ -150,19 +145,6 @@ def _context_fields(
         fields["operation_Id"] = trace.trace_id
         fields["operation_ParentId"] = trace.parent_id
     return fields
-
-
-def _validated_gcp_project_id(value: str | None) -> str | None:
-    if value is None:
-        return None
-    if (
-        not value
-        or not value.isascii()
-        or "/" in value
-        or any(not _VISIBLE_ASCII_START <= ord(character) <= _VISIBLE_ASCII_END for character in value)
-    ):
-        raise ValueError("gcp_project_id must be a non-empty visible ASCII project ID without slashes")
-    return value
 
 
 def _json_safe(value: Any, seen: set[int] | None = None) -> Any:  # noqa: ANN401

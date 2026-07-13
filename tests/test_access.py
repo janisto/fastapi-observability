@@ -22,10 +22,10 @@ TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
 
 class JSONCaptureHandler(logging.Handler):
-    def __init__(self, preset=LoggingPreset.DEFAULT, *, gcp_project_id=None):
+    def __init__(self, preset=LoggingPreset.DEFAULT):
         super().__init__()
         self.entries = []
-        self.setFormatter(JSONFormatter(preset, gcp_project_id=gcp_project_id))
+        self.setFormatter(JSONFormatter(preset))
 
     @override
     def emit(self, record):
@@ -61,7 +61,6 @@ def _app(
     handler,
     *,
     preset=LoggingPreset.DEFAULT,
-    gcp_project_id=None,
     extra_fields=None,
     clock=None,
     status_level=None,
@@ -70,7 +69,6 @@ def _app(
     config = AccessLogConfig(
         logger=_logger(handler),
         preset=preset,
-        gcp_project_id=gcp_project_id,
         extra_fields=extra_fields,
         clock=clock or __import__("time").perf_counter,
         status_level=status_level,
@@ -419,24 +417,16 @@ async def test_failing_callbacks_fall_back_without_changing_response():
 
 
 async def test_gcp_http_request_and_trace_shape_omit_query_and_fake_span():
-    handler = JSONCaptureHandler(LoggingPreset.GCP, gcp_project_id="example-project")
-    async with asgi_client(
-        _app(handler, preset=LoggingPreset.GCP, gcp_project_id="example-project"), client=("192.0.2.4", 1)
-    ) as client:
+    handler = JSONCaptureHandler(LoggingPreset.GCP)
+    async with asgi_client(_app(handler, preset=LoggingPreset.GCP), client=("192.0.2.4", 1)) as client:
         await client.get("/items/one?token=secret", headers={"traceparent": TRACEPARENT, "host": "example.test"})
     entry = handler.entries[0]
     assert entry["severity"] == "INFO"
     assert entry["httpRequest"]["requestUrl"] == "http://example.test/items/one"
     assert entry["httpRequest"]["remoteIp"] == "192.0.2.4"
     assert entry["httpRequest"]["latency"].endswith("s")
-    assert entry["logging.googleapis.com/trace"] == ("projects/example-project/traces/4bf92f3577b34da6a3ce929d0e0e4736")
+    assert entry["logging.googleapis.com/trace"] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert "logging.googleapis.com/spanId" not in entry
-
-
-@pytest.mark.parametrize("project_id", ["", "bad/project", "bad project", "é"])
-def test_invalid_gcp_project_id_fails_at_access_config_construction(project_id):
-    with pytest.raises(ValueError, match="gcp_project_id"):
-        AccessLogConfig(gcp_project_id=project_id)
 
 
 async def _empty_receive():

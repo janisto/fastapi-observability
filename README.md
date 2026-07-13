@@ -21,7 +21,11 @@ uv add fastapi-request-observability
 Python 3.13 or newer and FastAPI 0.139.0 or newer are supported. The Python
 compatibility window follows the latest two stable feature releases.
 
-## Minimal setup
+## GCP setup
+
+When this documentation shows one configuration, it uses GCP. Complete
+runnable GCP, provider-neutral, AWS, and Azure applications are available in
+[`examples`](examples).
 
 ```python
 import logging
@@ -31,11 +35,12 @@ from fastapi_request_observability import (
     AccessLogConfig,
     AccessLogMiddleware,
     JSONFormatter,
+    LoggingPreset,
     RequestContextMiddleware,
 )
 
 handler = logging.StreamHandler()
-handler.setFormatter(JSONFormatter())
+handler.setFormatter(JSONFormatter(LoggingPreset.GCP))
 
 root_logger = logging.getLogger()
 root_logger.handlers.clear()
@@ -49,7 +54,10 @@ app = FastAPI()
 # record emission.
 app.add_middleware(
     AccessLogMiddleware,
-    config=AccessLogConfig(logger=logging.getLogger("http.access")),
+    config=AccessLogConfig(
+        logger=logging.getLogger("http.access"),
+        preset=LoggingPreset.GCP,
+    ),
 )
 app.add_middleware(RequestContextMiddleware)
 
@@ -148,29 +156,26 @@ authorization, cookies, and arbitrary headers are never logged.
 
 ## Cloud presets
 
-Pass the same preset and provider configuration to the formatter and access
-configuration:
+Pass the same preset to the formatter and access configuration:
 
 ```python
 from fastapi_request_observability import AccessLogConfig, JSONFormatter, LoggingPreset
 
 preset = LoggingPreset.GCP  # or AWS, AZURE, DEFAULT
-gcp_project_id = "example-project"
-handler.setFormatter(JSONFormatter(preset, gcp_project_id=gcp_project_id))
+handler.setFormatter(JSONFormatter(preset))
 access_config = AccessLogConfig(
     logger=logging.getLogger("http.access"),
     preset=preset,
-    gcp_project_id=gcp_project_id,
 )
 ```
 
 - `GCP` uses `severity`, `logging.googleapis.com/trace`,
   `logging.googleapis.com/trace_sampled`, and a structured `httpRequest` access
-  field. Set `gcp_project_id` to the actual Google Cloud project ID so the
-  special trace field is the required
-  `projects/PROJECT_ID/traces/TRACE_ID` resource name. Without a project ID,
-  generic `trace_id` remains available but the Google special trace fields are
-  omitted. The preset never emits a fake `logging.googleapis.com/spanId`.
+  field. `logging.googleapis.com/trace` contains the validated raw W3C trace
+  ID, which Google Cloud has preferred since January 26, 2026. The legacy
+  project-qualified resource name remains accepted by Google, but this package
+  follows the current convention and requires no project-ID configuration.
+  The preset never emits a fake `logging.googleapis.com/spanId`.
 - `AWS` adds `xray_trace_id` in `1-8hex-24hex` form. It does not create an X-Ray
   segment.
 - `AZURE` adds `operation_Id` and `operation_ParentId`. It does not start or
@@ -206,7 +211,10 @@ FastAPI application exported to the ASGI server:
 fastapi_app = FastAPI()
 fastapi_app.add_middleware(
     AccessLogMiddleware,
-    config=AccessLogConfig(logger=logging.getLogger("http.access")),
+    config=AccessLogConfig(
+        logger=logging.getLogger("http.access"),
+        preset=LoggingPreset.GCP,
+    ),
 )
 
 # Add routes and other FastAPI middleware to fastapi_app first.
