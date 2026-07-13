@@ -140,15 +140,6 @@ body:
       description: Paste relevant, redacted text. Include timestamps, request IDs, and correlated log lines when they help demonstrate the problem.
       render: shell
 
-  - type: upload
-    id: diagnostic-files
-    attributes:
-      label: Diagnostic files
-      description: Optionally attach redacted logs, JSON output, a minimal Python reproduction, or a minimal archive. Review every file for sensitive data first.
-    validations:
-      required: false
-      accept: ".log,.txt,.json,.py,.zip,.gz,.tar.gz"
-
   - type: textarea
     id: impact
     attributes:
