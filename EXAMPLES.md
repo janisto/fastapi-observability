@@ -56,9 +56,7 @@ app.add_middleware(RequestContextMiddleware)
 ```
 
 No Google Cloud project ID is required. With valid W3C context,
-`logging.googleapis.com/trace` contains the raw trace ID. Google Cloud made
-that the preferred `LogEntry.trace` format on January 26, 2026; the
-project-qualified resource name is now the legacy format.
+`logging.googleapis.com/trace` contains the raw trace ID.
 
 ## Shared environment fields
 

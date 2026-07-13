@@ -172,10 +172,8 @@ access_config = AccessLogConfig(
 - `GCP` uses `severity`, `logging.googleapis.com/trace`,
   `logging.googleapis.com/trace_sampled`, and a structured `httpRequest` access
   field. `logging.googleapis.com/trace` contains the validated raw W3C trace
-  ID, which Google Cloud has preferred since January 26, 2026. The legacy
-  project-qualified resource name remains accepted by Google, but this package
-  follows the current convention and requires no project-ID configuration.
-  The preset never emits a fake `logging.googleapis.com/spanId`.
+  ID and requires no project-ID configuration. The preset never emits a fake
+  `logging.googleapis.com/spanId`.
 - `AWS` adds `xray_trace_id` in `1-8hex-24hex` form. It does not create an X-Ray
   segment.
 - `AZURE` adds `operation_Id` and `operation_ParentId`. It does not start or
