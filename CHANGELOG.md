@@ -15,6 +15,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Delayed access-record emission until final ASGI response trailers when a
   response declares them, preserving trailer-send failures and full duration.
 
+### Internal
+
+- Added the repository-local `adversarial-testing` skill and expanded
+  mutation-resistant coverage across failure recovery, concurrency, protocol
+  boundaries, and built distributions.
+
 ## [0.2.0] - 2026-07-13
 
 ### Changed
