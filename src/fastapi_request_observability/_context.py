@@ -98,8 +98,10 @@ def _new_valid_request_id(generator: RequestIDGenerator, validator: RequestIDVal
 
 
 def _is_valid(validator: RequestIDValidator, value: str) -> bool:
-    if not value.isascii() or any(
-        not _VISIBLE_ASCII_START <= ord(character) <= _VISIBLE_ASCII_END for character in value
+    if (
+        not value
+        or not value.isascii()
+        or any(not _VISIBLE_ASCII_START <= ord(character) <= _VISIBLE_ASCII_END for character in value)
     ):
         return False
     try:

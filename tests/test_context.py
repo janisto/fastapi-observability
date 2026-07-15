@@ -15,9 +15,14 @@ from fastapi_request_observability._context import (
 TRACEPARENT = b"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
 
-@pytest.mark.parametrize("character", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
-def test_default_request_id_accepts_unreserved_ascii(character):
-    assert _default_validate_request_id(character)
+def _assert_default_generated_request_id(value):
+    assert len(value) == 32, f"expected a 32-character default ID, got {value!r}"
+    assert _default_validate_request_id(value), f"expected a header-safe default ID, got {value!r}"
+
+
+def test_default_request_id_accepts_every_unreserved_ascii_character():
+    for character in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~":
+        assert _default_validate_request_id(character), f"expected {character!r} to be accepted"
 
 
 @pytest.mark.parametrize("value", ["", "x" * 129, "space value", "line\nfeed", "é", "/", "?"])
@@ -82,7 +87,7 @@ def test_duplicate_traceparent_is_invalid():
     assert context.correlation_id == "request-2"
 
 
-def test_generator_is_retried_then_safe_fallback_is_used():
+def test_invalid_generator_is_retried_then_safe_fallback_is_used():
     calls = 0
 
     def invalid_generator():
@@ -92,34 +97,87 @@ def test_generator_is_retried_then_safe_fallback_is_used():
 
     generated = _new_valid_request_id(invalid_generator, _default_validate_request_id)
     assert calls == 2
-    assert len(generated) == 32
-    assert _default_validate_request_id(generated)
+    _assert_default_generated_request_id(generated)
 
-    assert _new_valid_request_id(lambda: "rejected", lambda _value: False) != "rejected"
+
+def test_validator_rejecting_every_candidate_uses_safe_fallback():
+    generated = _new_valid_request_id(lambda: "rejected", lambda _value: False)
+
+    assert generated != "rejected"
+    _assert_default_generated_request_id(generated)
+
+
+def test_generator_exception_is_retried_before_falling_back():
+    attempts = iter([RuntimeError("temporary failure"), "recovered"])
+
+    def flaky_generator():
+        result = next(attempts)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    assert _new_valid_request_id(flaky_generator, _default_validate_request_id) == "recovered"
 
 
 def test_custom_generator_exception_uses_fallback():
     def broken_generator():
         raise RuntimeError("broken")
 
-    assert len(_new_valid_request_id(broken_generator, _default_validate_request_id)) == 32
+    _assert_default_generated_request_id(_new_valid_request_id(broken_generator, _default_validate_request_id))
 
 
-def test_entropy_or_validator_exception_uses_safe_fallback(monkeypatch):
+@pytest.mark.parametrize("candidate", [None, 42, b"bytes"])
+def test_non_string_generator_results_are_retried_then_replaced(candidate):
+    calls = 0
+
+    def generator():
+        nonlocal calls
+        calls += 1
+        return candidate
+
+    generated = _new_valid_request_id(generator, _default_validate_request_id)
+
+    assert calls == 2
+    _assert_default_generated_request_id(generated)
+
+
+def test_entropy_failure_uses_unique_safe_emergency_ids(monkeypatch):
     def broken_entropy(_size):
         raise OSError("entropy unavailable")
 
+    monkeypatch.setattr("fastapi_request_observability._context.secrets.token_hex", broken_entropy)
+    monkeypatch.setattr("fastapi_request_observability._context.time.time_ns", lambda: 1)
+    monkeypatch.setattr("fastapi_request_observability._context.os.getpid", lambda: 2)
+    first = _default_request_id()
+    second = _default_request_id()
+
+    assert first != second
+    _assert_default_generated_request_id(first)
+    _assert_default_generated_request_id(second)
+
+
+def test_validator_exception_uses_safe_fallback():
     def broken_validator(_value):
         raise RuntimeError("validator failed")
 
-    monkeypatch.setattr("fastapi_request_observability._context.secrets.token_hex", broken_entropy)
-    assert len(_default_request_id()) == 32
-    assert len(_new_valid_request_id(lambda: "candidate", broken_validator)) == 32
+    generated = _new_valid_request_id(lambda: "candidate", broken_validator)
+
+    _assert_default_generated_request_id(generated)
 
 
-def test_custom_validator_cannot_admit_unsafe_header_bytes():
+def test_invalid_package_fallback_is_replaced_by_last_resort_safe_id(monkeypatch):
+    monkeypatch.setattr("fastapi_request_observability._context._default_request_id", lambda: "bad value")
+
+    generated = _new_valid_request_id(lambda: "also invalid", _default_validate_request_id)
+
+    assert generated not in {"bad value", "also invalid"}
+    _assert_default_generated_request_id(generated)
+
+
+@pytest.mark.parametrize("value", ["", " ", "\x7f", "é"])
+def test_custom_validator_cannot_admit_empty_or_unsafe_header_values(value):
     context = _build_context(
-        [(b"x-request-id", "é".encode())],
+        [(b"x-request-id", value.encode("latin-1"))],
         request_id_header="X-Request-ID",
         traceparent_header="traceparent",
         tracestate_header="tracestate",
@@ -127,6 +185,31 @@ def test_custom_validator_cannot_admit_unsafe_header_bytes():
         validator=lambda _value: True,
     )
     assert context.request_id == "safe-id"
+
+
+@pytest.mark.parametrize("value", ["!", "~"])
+def test_custom_validator_can_admit_visible_ascii_boundaries(value):
+    context = _build_context(
+        [(b"x-request-id", value.encode())],
+        request_id_header="X-Request-ID",
+        traceparent_header="traceparent",
+        tracestate_header="tracestate",
+        generator=lambda: "fallback",
+        validator=lambda _value: True,
+    )
+    assert context.request_id == value
+
+
+def test_empty_custom_generated_value_uses_safe_fallback():
+    context = _build_context(
+        [],
+        request_id_header="X-Request-ID",
+        traceparent_header="traceparent",
+        tracestate_header="tracestate",
+        generator=lambda: "",
+        validator=lambda _value: True,
+    )
+    _assert_default_generated_request_id(context.request_id)
 
 
 def test_accessors_outside_context_are_none():

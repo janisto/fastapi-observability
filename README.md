@@ -90,8 +90,9 @@ bits of randomness. The selected value is available from:
 
 The response header, input headers, generator, and validator are configurable
 with `RequestContextConfig`. Generated values are validated too, and an invalid
-custom generator falls back to the package's safe format. Accessors return
-`None` outside a request; no background-job context is manufactured.
+custom generator falls back to the package's safe format. Custom validators
+cannot admit empty, non-ASCII, or non-visible values. Accessors return `None`
+outside a request; no background-job context is manufactured.
 Invalid or empty configured HTTP header names fail immediately when the config
 object is constructed; use `inject_response_header=False` to disable response
 header injection.
@@ -191,8 +192,9 @@ exception unchanged. It never synthesizes a replacement 500 response.
 - An exception before `http.response.start` logs status 500.
 - Once response headers are sent, that committed status wins even if streaming
   later fails.
-- Access emission occurs after the final response body event, so duration
-  includes streaming but excludes later Starlette background work.
+- Access emission occurs after the final response body event, or after the final
+  response-trailers event when trailers were declared, so duration includes
+  streaming and trailers but excludes later Starlette background work.
 - A background-task failure does not produce a second record.
 - Logging and custom-field callback failures are diagnosed to `stderr` and do
   not replace the response.
