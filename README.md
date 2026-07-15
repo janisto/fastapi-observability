@@ -1,5 +1,10 @@
 # fastapi-request-observability
 
+[![PyPI version](https://img.shields.io/pypi/v/fastapi-request-observability.svg)](https://pypi.org/project/fastapi-request-observability/)
+[![Python versions](https://img.shields.io/pypi/pyversions/fastapi-request-observability.svg)](https://pypi.org/project/fastapi-request-observability/)
+[![CI](https://img.shields.io/github/actions/workflow/status/janisto/fastapi-observability/ci.yml?branch=main&label=CI)](https://github.com/janisto/fastapi-observability/actions/workflows/ci.yml)
+[![License](https://img.shields.io/pypi/l/fastapi-request-observability.svg)](LICENSE)
+
 Focused FastAPI middleware for request IDs, W3C trace correlation, contextual
 JSON logs, and one structured access record per HTTP response.
 
