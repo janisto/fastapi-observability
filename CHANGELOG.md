@@ -7,6 +7,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Internal
+
+- Added a maintainer release guide for draft-first GitHub releases and
+  OIDC-based PyPI trusted publishing.
+- Renamed `justfile` to `Justfile` and added an explicit `clean-dist` recipe for
+  repeatable package builds.
+
 ## [0.2.1] - 2026-07-15
 
 ### Fixed

@@ -27,8 +27,8 @@ fix:
     uvx ruff format
 
 [group('package')]
-build:
-    uv build --clear --no-sources
+build: clean-dist
+    uv build --no-sources
 
 [group('package')]
 smoke-wheel: build
@@ -52,3 +52,8 @@ install:
 [group('lifecycle')]
 update:
     uv sync --upgrade
+
+# Remove generated package distributions.
+[group('lifecycle')]
+clean-dist:
+    rm -rf dist
