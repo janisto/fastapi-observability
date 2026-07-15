@@ -28,7 +28,7 @@ fix:
 
 [group('package')]
 build:
-    uv build --no-sources
+    uv build --clear --no-sources
 
 [group('package')]
 smoke-wheel: build

@@ -7,6 +7,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-15
+
 ### Fixed
 
 - Prevented permissive custom request-ID validators from admitting empty values.
@@ -20,6 +22,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Added the repository-local `adversarial-testing` skill and expanded
   mutation-resistant coverage across failure recovery, concurrency, protocol
   boundaries, and built distributions.
+- Made local distribution builds clear stale artifacts before package
+  validation.
 
 ## [0.2.0] - 2026-07-13
 
@@ -49,6 +53,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Full W3C `tracestate` validation and Google Cloud's preferred raw trace-ID
   correlation format.
 
-[Unreleased]: https://github.com/janisto/fastapi-observability/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/janisto/fastapi-observability/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/janisto/fastapi-observability/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/janisto/fastapi-observability/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/janisto/fastapi-observability/releases/tag/v0.1.0
