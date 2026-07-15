@@ -66,8 +66,12 @@ async def test_provider_example_is_runnable(module_name, capsys):
     assert response.headers["X-Request-ID"] == "example-request"
 
     entries = [json.loads(line) for line in capsys.readouterr().err.splitlines() if line]
-    application = next(entry for entry in entries if entry["message"] == "health check")
-    access = next(entry for entry in entries if entry["message"] == "request completed")
+    relevant_entries = [entry for entry in entries if entry["logger"] in {module_name, "http.access"}]
+    assert [(entry["logger"], entry["message"]) for entry in relevant_entries] == [
+        (module_name, "health check"),
+        ("http.access", "request completed"),
+    ]
+    application, access = relevant_entries
     for entry in (application, access):
         assert entry["request_id"] == "example-request"
         assert entry["correlation_id"] == TRACE_ID

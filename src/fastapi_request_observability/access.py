@@ -86,6 +86,7 @@ class AccessLogMiddleware:
         clock, start = _start_clock(self.config.clock)
         status: int | None = None
         emitted = False
+        trailers_pending = False
 
         def emit(error: BaseException | None = None) -> None:
             nonlocal emitted
@@ -114,14 +115,19 @@ class AccessLogMiddleware:
                 _diagnostic("access log emission failed", logging_error)
 
         async def send_with_observation(message: _Message) -> None:
-            nonlocal status
+            nonlocal status, trailers_pending
             if message["type"] == "http.response.start" and created_context:
                 _set_header(message, "X-Request-ID", context.request_id)
             await send(message)
             if message["type"] == "http.response.start":
                 status = message["status"]
-            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                trailers_pending = bool(message.get("trailers", False))
+            if message["type"] == "http.response.body" and not message.get("more_body", False) and not trailers_pending:
                 emit()
+            if message["type"] == "http.response.trailers":
+                trailers_pending = bool(message.get("more_trailers", False))
+                if not trailers_pending:
+                    emit()
 
         try:
             await self.app(scope, receive, send_with_observation)
@@ -228,8 +234,11 @@ def _request_url(scope: _Scope, path: str) -> str:
     host = _first_header(scope, "host")
     if not host:
         server = scope.get("server")
-        if server:
-            host = f"{server[0]}:{server[1]}"
+        if server and server[1] is not None:
+            server_host = server[0]
+            if ":" in server_host and not (server_host.startswith("[") and server_host.endswith("]")):
+                server_host = f"[{server_host}]"
+            host = f"{server_host}:{server[1]}"
     return f"{scope.get('scheme', 'http')}://{host}{path}" if host else path
 
 

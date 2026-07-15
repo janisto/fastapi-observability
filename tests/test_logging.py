@@ -9,6 +9,17 @@ from fastapi_request_observability.trace import parse_traceparent
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 PARENT_ID = "00f067aa0ba902b7"
+PROVIDER_FIELDS = {
+    "logging.googleapis.com/trace",
+    "logging.googleapis.com/trace_sampled",
+    "xray_trace_id",
+    "operation_Id",
+    "operation_ParentId",
+}
+
+
+class UnsupportedValue:
+    pass
 
 
 def _record(level=logging.INFO, *, name="test.logger", message="hello %s", args=("world",), **extra):
@@ -19,13 +30,17 @@ def _record(level=logging.INFO, *, name="test.logger", message="hello %s", args=
 
 def test_compact_json_base_fields_and_source():
     output = JSONFormatter(include_source=True).format(_record())
-    assert "\n" not in output
     parsed = json.loads(output)
+    assert output == json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
     assert parsed["level"] == "INFO"
     assert parsed["logger"] == "test.logger"
     assert parsed["message"] == "hello world"
     assert parsed["timestamp"].endswith("Z")
     assert parsed["source"] == {"file": "app.py", "line": 42, "function": "handler"}
+
+
+def test_default_formatter_omits_opt_in_source_field():
+    assert "source" not in json.loads(JSONFormatter().format(_record()))
 
 
 @pytest.mark.parametrize("level", [logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL])
@@ -36,26 +51,94 @@ def test_level_names(level):
 def test_structured_extras_and_deterministic_unsupported_fallback():
     circular = []
     circular.append(circular)
+    circular_mapping = {}
+    circular_mapping["self"] = circular_mapping
     parsed = json.loads(
-        JSONFormatter().format(_record(structured={"items": [1, True]}, unsupported=object(), circular=circular))
+        JSONFormatter().format(
+            _record(
+                structured={"items": [1, True]},
+                unsupported=UnsupportedValue(),
+                circular=circular,
+                circular_mapping=circular_mapping,
+                not_a_number=float("nan"),
+                infinity=float("inf"),
+            )
+        )
     )
+    unsupported_type = f"{UnsupportedValue.__module__}.{UnsupportedValue.__qualname__}"
     assert parsed["structured"] == {"items": [1, True]}
-    assert parsed["unsupported"] == "<unsupported:builtins.object>"
+    assert parsed["unsupported"] == f"<unsupported:{unsupported_type}>"
     assert parsed["circular"] == ["<circular>"]
+    assert parsed["circular_mapping"] == {"self": "<circular>"}
+    assert parsed["not_a_number"] == "<unsupported:builtins.float>"
+    assert parsed["infinity"] == "<unsupported:builtins.float>"
 
 
 def test_json_serializable_non_string_mapping_keys_are_preserved():
-    parsed = json.loads(JSONFormatter().format(_record(structured={1: "one", 2: "two", float("nan"): "bad"})))
+    custom_key = UnsupportedValue()
+    parsed = json.loads(
+        JSONFormatter().format(
+            _record(
+                structured={
+                    1: "one",
+                    2: "two",
+                    1.5: "finite-float",
+                    float("nan"): "nonfinite-float",
+                    custom_key: "custom",
+                }
+            )
+        )
+    )
+    unsupported_type = f"{UnsupportedValue.__module__}.{UnsupportedValue.__qualname__}"
     assert parsed["structured"]["1"] == "one"
     assert parsed["structured"]["2"] == "two"
-    assert parsed["structured"]["<key:builtins.float>"] == "bad"
+    assert parsed["structured"]["1.5"] == "finite-float"
+    assert parsed["structured"]["<key:builtins.float>"] == "nonfinite-float"
+    assert parsed["structured"][f"<key:{unsupported_type}>"] == "custom"
 
 
 def test_reserved_extra_fields_are_ignored():
-    parsed = json.loads(JSONFormatter().format(_record(timestamp="bad", method="bad", severity="bad")))
-    assert parsed["timestamp"] != "bad"
-    assert "method" not in parsed
-    assert "severity" not in parsed
+    record = _record()
+    spoofed_fields = {
+        "timestamp": "spoofed",
+        "level": "spoofed",
+        "severity": "spoofed",
+        "logger": "spoofed",
+        "message": "spoofed",
+        "stacktrace": "spoofed",
+        "request_id": "spoofed",
+        "correlation_id": "spoofed",
+        "trace_id": "spoofed",
+        "parent_id": "spoofed",
+        "trace_flags": "spoofed",
+        "trace_sampled": "spoofed",
+        "logging.googleapis.com/trace": "spoofed",
+        "logging.googleapis.com/trace_sampled": "spoofed",
+        "logging.googleapis.com/spanId": "spoofed",
+        "xray_trace_id": "spoofed",
+        "operation_Id": "spoofed",
+        "operation_ParentId": "spoofed",
+        "method": "spoofed",
+        "path": "spoofed",
+        "path_template": "spoofed",
+        "operation_id": "spoofed",
+        "status": "spoofed",
+        "duration_ms": "spoofed",
+        "remote_ip": "spoofed",
+        "user_agent": "spoofed",
+        "error": "spoofed",
+        "httpRequest": "spoofed",
+        "source": "spoofed",
+    }
+    record.__dict__.update(spoofed_fields)
+
+    parsed = json.loads(JSONFormatter().format(record))
+
+    assert parsed["timestamp"] != "spoofed"
+    assert parsed["level"] == "INFO"
+    assert parsed["logger"] == "test.logger"
+    assert parsed["message"] == "hello world"
+    assert not (spoofed_fields.keys() - {"timestamp", "level", "logger", "message"}) & parsed.keys()
 
 
 def test_exception_stacktrace():
@@ -105,23 +188,28 @@ def test_context_and_provider_shapes(preset, expected):
     assert parsed["trace_flags"] == "01"
     assert parsed["trace_sampled"] is True
     assert all(parsed[key] == value for key, value in expected.items())
+    assert {key: parsed[key] for key in PROVIDER_FIELDS if key in parsed} == {
+        key: value for key, value in expected.items() if key in PROVIDER_FIELDS
+    }
     assert "logging.googleapis.com/spanId" not in parsed
+    if preset is LoggingPreset.GCP:
+        assert "level" not in parsed
+    else:
+        assert "severity" not in parsed
 
 
-def test_gcp_trace_uses_preferred_raw_trace_id():
-    trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01")
-    assert trace is not None
-    token = _bind_context(RequestContext("request-1", TRACE_ID, trace))
-    try:
-        parsed = json.loads(JSONFormatter(LoggingPreset.GCP).format(_record()))
-    finally:
-        _reset_context(token)
-    assert parsed["trace_id"] == TRACE_ID
-    assert parsed["logging.googleapis.com/trace"] == TRACE_ID
-    assert parsed["logging.googleapis.com/trace_sampled"] is True
-
-
-def test_no_context_has_no_correlation_fields():
-    parsed = json.loads(JSONFormatter().format(_record()))
-    assert "request_id" not in parsed
-    assert "trace_id" not in parsed
+@pytest.mark.parametrize("preset", list(LoggingPreset))
+def test_no_context_has_no_correlation_or_provider_fields(preset):
+    parsed = json.loads(JSONFormatter(preset).format(_record()))
+    assert (
+        not {
+            "request_id",
+            "correlation_id",
+            "trace_id",
+            "parent_id",
+            "trace_flags",
+            "trace_sampled",
+            *PROVIDER_FIELDS,
+        }
+        & parsed.keys()
+    )

@@ -7,6 +7,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevented permissive custom request-ID validators from admitting empty values.
+- Formatted IPv6 ASGI server addresses correctly in GCP request URLs and avoided
+  treating Unix-socket paths as URL authorities.
+- Delayed access-record emission until final ASGI response trailers when a
+  response declares them, preserving trailer-send failures and full duration.
+
+### Internal
+
+- Added the repository-local `adversarial-testing` skill and expanded
+  mutation-resistant coverage across failure recovery, concurrency, protocol
+  boundaries, and built distributions.
+
 ## [0.2.0] - 2026-07-13
 
 ### Changed
