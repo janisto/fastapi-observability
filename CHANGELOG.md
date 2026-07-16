@@ -7,14 +7,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-16
+
 ### Added
 
 - Added a focused mutmut campaign for the W3C traceparent parser.
+- Added a public maintainer guide for draft-first GitHub releases and OIDC-based
+  PyPI trusted publishing.
+- Added package, Python, CI, and license status badges to the README.
 
 ### Changed
 
-- Added a maintainer release guide for draft-first GitHub releases and
-  OIDC-based PyPI trusted publishing.
+- Declared exported APIs, configuration defaults, structured log fields, and
+  supported runtime versions stable compatibility contracts. Runtime behavior
+  and the public API are unchanged from v0.2.1.
+- Marked the package as Production/Stable in its distribution metadata.
+- Expanded the README's package rationale and standard-output logging guidance.
 - Renamed `justfile` to `Justfile` and added an explicit `clean-dist` recipe for
   repeatable package builds.
 
@@ -62,7 +70,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Full W3C `tracestate` validation and Google Cloud's preferred raw trace-ID
   correlation format.
 
-[Unreleased]: https://github.com/janisto/fastapi-observability/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/janisto/fastapi-observability/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/janisto/fastapi-observability/compare/v0.2.1...v1.0.0
 [0.2.1]: https://github.com/janisto/fastapi-observability/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/janisto/fastapi-observability/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/janisto/fastapi-observability/releases/tag/v0.1.0

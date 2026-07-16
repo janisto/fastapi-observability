@@ -262,7 +262,7 @@ configuration and test setup.
 All request state is local to a pure ASGI `__call__` and the `ContextVar` token
 is reset in `finally`. Concurrent and sequential requests cannot share package
 context. WebSocket and lifespan scopes pass through unchanged; WebSocket access
-logging is outside the v0.1 scope.
+logging is outside the package scope.
 
 ## Proxy trust
 
@@ -273,9 +273,11 @@ server or deployment so `scope["client"]` is already normalized.
 
 ## Compatibility
 
-The v0.x line may evolve, but logged field names are treated as a compatibility
-contract. Field changes require changelog review. The package does not configure
-logging at import time and does not claim ownership of exception responses.
+Beginning with v1.0.0, exported APIs, configuration defaults, structured log
+fields, and supported runtime versions are compatibility contracts. Breaking
+changes require a new major version, explicit changelog coverage, and migration
+guidance. The package does not configure logging at import time and does not
+claim ownership of exception responses.
 
 Repository tests use HTTPX2 directly with its asynchronous ASGI transport.
 Deprecated HTTPX and FastAPI/Starlette `TestClient` are intentionally excluded.
