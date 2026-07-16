@@ -8,10 +8,35 @@
 Focused FastAPI middleware for request IDs, W3C trace correlation, contextual
 JSON logs, and one structured access record per HTTP response.
 
-This package deliberately does not create traces, metrics, or profiles. It has
-no OpenTelemetry, provider SDK, exporter, or logging-framework dependency. It
-uses standard-library `logging` and pure ASGI middleware so applications retain
-control of recovery, handlers, and deployment policy.
+## Why this package exists
+
+Managed platforms such as Cloud Run already collect container output.
+Applications should only need to write structured JSON to standard output
+(`stdout`); the platform can handle ingestion and delivery.
+
+Compared with sending logs through an in-process cloud logging client, this
+reduces container CPU, memory, and network use by removing logging API calls,
+authentication, buffering, batching, and retry work from the application. Under
+sustained logging load, that reduction can provide a noticeable performance
+improvement. It also avoids the dependency and maintenance cost of a cloud
+logging SDK, including its configuration, credentials, and upgrades.
+
+This package turns that simple pipeline into useful production observability.
+It provides validated request IDs, strict W3C trace correlation,
+request-scoped fields, and one structured terminal access record. Application
+and access logs share the same correlation metadata, making all records from a
+request easier to find, filter, and understand.
+
+Cloud presets map the same logging contract to provider-oriented fields without
+coupling application code to a cloud logging SDK. The package focuses on
+structured logging and request correlation: it does not create spans, configure
+OpenTelemetry, or ship logs to a backend.
+
+## Package scope
+
+It uses standard-library `logging` and pure ASGI middleware, with no exporter or
+logging-framework dependency, so applications retain control of recovery,
+handlers, and deployment policy.
 
 > The PyPI distribution is `fastapi-request-observability` and the import is
 > `fastapi_request_observability`. The similarly named
@@ -34,6 +59,7 @@ runnable GCP, provider-neutral, AWS, and Azure applications are available in
 
 ```python
 import logging
+import sys
 
 from fastapi import FastAPI
 from fastapi_request_observability import (
@@ -44,7 +70,7 @@ from fastapi_request_observability import (
     RequestContextMiddleware,
 )
 
-handler = logging.StreamHandler()
+handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(JSONFormatter(LoggingPreset.GCP))
 
 root_logger = logging.getLogger()
@@ -258,3 +284,18 @@ If the package later needs to mock outbound HTTP, use `pytest-httpx2` and its
 
 See [EXAMPLES.md](https://github.com/janisto/fastapi-observability/blob/main/EXAMPLES.md)
 for complete configurations.
+
+## Mutation testing
+
+The traceparent parser has a focused [mutmut](https://github.com/boxed/mutmut)
+campaign. It introduces small changes to `parse_traceparent` and verifies that
+the parser tests detect observable behavior changes:
+
+```sh
+just mutation
+```
+
+This intentionally runs outside `just check`. Use `uv run mutmut results` to
+list surviving mutants and `uv run mutmut show <mutant>` to inspect one. Add a
+test when a survivor exposes a contract gap; equivalent transformations do not
+need production pragmas or artificial assertions.
