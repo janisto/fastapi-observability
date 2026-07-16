@@ -20,6 +20,7 @@ coverage.xml
 htmlcov/
 .ruff_cache/
 .mypy_cache/
+mutants/
 
 # Package builds
 build/

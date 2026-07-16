@@ -18,6 +18,11 @@ typing:
 test *args:
     uv run -m pytest -v --cov=fastapi_request_observability --cov-branch {{ args }}
 
+# mutmut prefixes generated function trampolines with `x_`.
+[group('test')]
+mutation:
+    uv run mutmut run "fastapi_request_observability.trace.x_parse_traceparent*"
+
 [group('qa')]
 check: lint typing test
 

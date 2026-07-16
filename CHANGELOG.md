@@ -1,13 +1,17 @@
 # Changelog
 
-All notable changes to this project are documented in this file.
+All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Internal
+### Added
+
+- Added a focused mutmut campaign for the W3C traceparent parser.
+
+### Changed
 
 - Added a maintainer release guide for draft-first GitHub releases and
   OIDC-based PyPI trusted publishing.
@@ -24,7 +28,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Delayed access-record emission until final ASGI response trailers when a
   response declares them, preserving trailer-send failures and full duration.
 
-### Internal
+### Changed
 
 - Added the repository-local `adversarial-testing` skill and expanded
   mutation-resistant coverage across failure recovery, concurrency, protocol
@@ -38,8 +42,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Expanded package discovery metadata; runtime behavior and the public API are
   unchanged.
-
-### Internal
 
 - Updated GitHub issue templates for clearer maintainer triage.
 
