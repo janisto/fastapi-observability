@@ -9,9 +9,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 EXPECTED_NAME = "fastapi-request-observability"
-EXPECTED_VERSION = "0.2.1"
+EXPECTED_VERSION = "1.0.0"
 EXPECTED_PYTHON = ">=3.13"
 EXPECTED_DEPENDENCIES = ["fastapi>=0.139.0"]
+EXPECTED_STATUS = "Development Status :: 5 - Production/Stable"
 EXPECTED_URLS = {
     "Repository, https://github.com/janisto/fastapi-observability",
     "Issues, https://github.com/janisto/fastapi-observability/issues",
@@ -39,6 +40,7 @@ with zipfile.ZipFile(wheel_paths[0]) as archive:
     assert metadata["Requires-Python"] == EXPECTED_PYTHON
     assert metadata["License-Expression"] == "MIT"
     assert requirements == EXPECTED_DEPENDENCIES
+    assert EXPECTED_STATUS in (metadata.get_all("Classifier") or [])
     assert set(project_urls) == EXPECTED_URLS
     assert all(
         forbidden not in requirement.lower()

@@ -77,7 +77,7 @@ body:
     attributes:
       label: Affected fastapi-request-observability version or commit
       description: Paste the installed distribution version, or provide the exact commit ID for an unreleased revision. You can query the installed version with `python -c "from importlib.metadata import version; print(version('fastapi-request-observability'))"`.
-      placeholder: "Example: 0.1.0 or commit abc1234"
+      placeholder: "Example: 1.0.0 or commit abc1234"
     validations:
       required: true
 
