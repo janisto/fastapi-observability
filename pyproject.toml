@@ -30,7 +30,7 @@ classifiers = [
     "Topic :: System :: Logging",
     "Typing :: Typed",
 ]
-dependencies = ["fastapi>=0.139.0"]
+dependencies = ["fastapi>=0.130.0"]
 
 [project.urls]
 Repository = "https://github.com/janisto/fastapi-observability"

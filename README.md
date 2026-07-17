@@ -48,7 +48,7 @@ handlers, and deployment policy.
 uv add fastapi-request-observability
 ```
 
-Python 3.13 or newer and FastAPI 0.139.0 or newer are supported. The Python
+Python 3.13 or newer and FastAPI 0.130.0 or newer are supported. The Python
 compatibility window follows the latest two stable feature releases.
 
 ## GCP setup

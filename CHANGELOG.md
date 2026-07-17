@@ -19,6 +19,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Lowered the minimum supported FastAPI version from 0.139.0 to 0.130.0 and
+  kept the declared floor covered by the dedicated minimum-version CI job.
 - Standardized repository QA and maintainer guidance. Runtime package behavior
   and the public API remain unchanged from v1.0.0.
 

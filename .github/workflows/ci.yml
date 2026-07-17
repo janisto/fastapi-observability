@@ -72,7 +72,7 @@ jobs:
           enable-cache: true
       - name: Test declared FastAPI floor
         run: >-
-          uv run --isolated --with-editable . --with fastapi==0.139.0
+          uv run --isolated --with-editable . --with fastapi==0.130.0
           --with pytest --with pytest-asyncio --with pytest-cov --with httpx2
           -m pytest -v --cov=fastapi_request_observability --cov-branch
 
