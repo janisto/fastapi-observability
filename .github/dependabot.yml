@@ -5,6 +5,7 @@ version: 2
 updates:
   - package-ecosystem: "uv"
     directory: "/"
+    versioning-strategy: "lockfile-only"
     schedule:
       interval: "quarterly"
       time: "08:00"

@@ -7,11 +7,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-17
+
 ### Added
 
 - Expanded the canonical GCP health-route example with structured application
   `INFO` and `DEBUG` events, and verified their stdout output alongside the
   correlated access record.
+- Added automatic pull-request labeling and a dedicated workflow-security
+  check.
+
+### Changed
+
+- Lowered the minimum supported FastAPI version from 0.139.0 to 0.130.0 and
+  kept the declared floor covered by the dedicated minimum-version CI job.
+- Standardized repository QA and maintainer guidance. Runtime package behavior
+  and the public API remain unchanged from v1.0.0.
 
 ## [1.0.0] - 2026-07-16
 
@@ -76,7 +87,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Full W3C `tracestate` validation and Google Cloud's preferred raw trace-ID
   correlation format.
 
-[Unreleased]: https://github.com/janisto/fastapi-observability/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/janisto/fastapi-observability/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/janisto/fastapi-observability/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/janisto/fastapi-observability/compare/v0.2.1...v1.0.0
 [0.2.1]: https://github.com/janisto/fastapi-observability/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/janisto/fastapi-observability/compare/v0.1.0...v0.2.0

@@ -129,7 +129,7 @@ wheels = [
 
 [[package]]
 name = "fastapi-request-observability"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -147,7 +147,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "fastapi", specifier = ">=0.139.0" }]
+requires-dist = [{ name = "fastapi", specifier = ">=0.130.0" }]
 
 [package.metadata.requires-dev]
 dev = [

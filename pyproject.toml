@@ -1,6 +1,6 @@
 [project]
 name = "fastapi-request-observability"
-version = "1.0.0"
+version = "1.0.1"
 description = "FastAPI middleware for request IDs, trace correlation, and structured access logs"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -30,7 +30,7 @@ classifiers = [
     "Topic :: System :: Logging",
     "Typing :: Typed",
 ]
-dependencies = ["fastapi>=0.139.0"]
+dependencies = ["fastapi>=0.130.0"]
 
 [project.urls]
 Repository = "https://github.com/janisto/fastapi-observability"
