@@ -7,6 +7,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- Expanded the canonical GCP health-route example with structured application
+  `INFO` and `DEBUG` events, and verified their stdout output alongside the
+  correlated access record.
+
 ## [1.0.0] - 2026-07-16
 
 ### Added

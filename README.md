@@ -3,7 +3,6 @@
 [![PyPI version](https://img.shields.io/pypi/v/fastapi-request-observability.svg)](https://pypi.org/project/fastapi-request-observability/)
 [![Python versions](https://img.shields.io/pypi/pyversions/fastapi-request-observability.svg)](https://pypi.org/project/fastapi-request-observability/)
 [![CI](https://img.shields.io/github/actions/workflow/status/janisto/fastapi-observability/ci.yml?branch=main&label=CI)](https://github.com/janisto/fastapi-observability/actions/workflows/ci.yml)
-[![License](https://img.shields.io/pypi/l/fastapi-request-observability.svg)](LICENSE)
 [![Socket Badge](https://badge.socket.dev/pypi/package/fastapi-request-observability)](https://socket.dev/pypi/package/fastapi-request-observability)
 
 Focused FastAPI middleware for request IDs, W3C trace correlation, contextual
@@ -288,6 +287,28 @@ If the package later needs to mock outbound HTTP, use `pytest-httpx2` and its
 See [EXAMPLES.md](https://github.com/janisto/fastapi-observability/blob/main/EXAMPLES.md)
 for complete configurations.
 
+## Development
+
+Development uses [uv](https://docs.astral.sh/uv/) and
+[just](https://github.com/casey/just). On macOS, install the workflow linters:
+
+```sh
+brew install actionlint zizmor
+```
+
+Then run the repository gates:
+
+```sh
+just install
+just qa
+just package-check
+```
+
+`just qa` runs Ruff, Ty, pytest with branch coverage,
+[actionlint](https://github.com/rhysd/actionlint), and
+[zizmor](https://docs.zizmor.sh/). `just package-check` builds, inspects, and
+smoke-tests the wheel and source distribution in isolated environments.
+
 ## Mutation testing
 
 The traceparent parser has a focused [mutmut](https://github.com/boxed/mutmut)
@@ -298,7 +319,7 @@ the parser tests detect observable behavior changes:
 just mutation
 ```
 
-This intentionally runs outside `just check`. Use `uv run mutmut results` to
+This intentionally runs outside `just qa`. Use `uv run mutmut results` to
 list surviving mutants and `uv run mutmut show <mutant>` to inspect one. Add a
 test when a survivor exposes a contract gap; equivalent transformations do not
 need production pragmas or artificial assertions.

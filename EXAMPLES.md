@@ -28,7 +28,7 @@ Every service follows the same shape:
 The canonical GCP wiring is:
 
 ```python
-handler = logging.StreamHandler()
+handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(JSONFormatter(LoggingPreset.GCP))
 
 root_logger = logging.getLogger()
@@ -67,13 +67,17 @@ curl -i \
 ```
 
 The request ID remains `demo-123`; `correlation_id` becomes the W3C trace ID.
-The handler and access records contain the same correlation fields. The access
-record also contains `httpRequest`, `/health` as the route template, and
-`health_check` as the explicit operation ID.
+Stdout contains an application `INFO` record with service health fields, an
+application `DEBUG` record with dependency-check fields, and the terminal
+access record. All three contain the same correlation fields. The access record
+also contains `httpRequest`, `/health` as the route template, and `health_check`
+as the explicit operation ID.
 
 Representative GCP fields:
 
 ```json
+{"severity":"INFO","logger":"examples.gcp.main","message":"health check","service_name":"example-service","service_version":"1.4.2","health_status":"ok","request_id":"demo-123","correlation_id":"4bf92f3577b34da6a3ce929d0e0e4736"}
+{"severity":"DEBUG","logger":"examples.gcp.main","message":"dependency check","dependency":"database","dependency_status":"ok","check_duration_ms":3,"request_id":"demo-123","correlation_id":"4bf92f3577b34da6a3ce929d0e0e4736"}
 {"severity":"INFO","message":"request completed","request_id":"demo-123","correlation_id":"4bf92f3577b34da6a3ce929d0e0e4736","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","logging.googleapis.com/trace":"4bf92f3577b34da6a3ce929d0e0e4736","logging.googleapis.com/trace_sampled":true,"method":"GET","path":"/health","path_template":"/health","operation_id":"health_check","status":200}
 ```
 
