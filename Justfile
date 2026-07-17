@@ -27,6 +27,14 @@ mutation:
 check: lint typing test
 
 [group('qa')]
+workflow-check:
+    actionlint
+    zizmor --offline .
+
+[group('qa')]
+qa: workflow-check check
+
+[group('qa')]
 fix:
     uvx ruff check --fix
     uvx ruff format

@@ -130,13 +130,14 @@ tests, and documentation must be reviewed together.
 ```bash
 just install
 uv lock --check
-just check
+just qa
 just package-check
 git diff --check
 ```
 
-`just check` runs Ruff lint and formatting checks, Ty, pytest, branch coverage,
-and the repository's coverage threshold. `just package-check` reaches the
+`just qa` runs Ruff lint and formatting checks, Ty, pytest, branch coverage,
+the repository's coverage threshold, actionlint, and
+[zizmor](https://docs.zizmor.sh/). `just package-check` reaches the
 `build` recipe, whose `clean-dist` prerequisite removes `dist/` before building
 the exact wheel and source distribution. It then inspects their metadata and
 contents and runs the smoke test against each artifact in an isolated

@@ -65,20 +65,39 @@ async def test_provider_example_is_runnable(module_name, capsys):
     assert response.json() == {"ok": True}
     assert response.headers["X-Request-ID"] == "example-request"
 
-    entries = [json.loads(line) for line in capsys.readouterr().err.splitlines() if line]
+    captured = capsys.readouterr()
+    if module_name == "examples.gcp.main":
+        assert captured.out
+        assert captured.err == ""
+        output = captured.out
+    else:
+        output = captured.err
+
+    entries = [json.loads(line) for line in output.splitlines() if line]
     relevant_entries = [entry for entry in entries if entry["logger"] in {module_name, "http.access"}]
-    assert [(entry["logger"], entry["message"]) for entry in relevant_entries] == [
-        (module_name, "health check"),
-        ("http.access", "request completed"),
-    ]
-    application, access = relevant_entries
-    for entry in (application, access):
+    expected_messages = [(module_name, "health check")]
+    if module_name == "examples.gcp.main":
+        expected_messages.append((module_name, "dependency check"))
+    expected_messages.append(("http.access", "request completed"))
+    assert [(entry["logger"], entry["message"]) for entry in relevant_entries] == expected_messages
+
+    *application_entries, access = relevant_entries
+    for entry in relevant_entries:
         assert entry["request_id"] == "example-request"
         assert entry["correlation_id"] == TRACE_ID
 
     assert access["path_template"] == "/health"
     assert access["operation_id"] == "health_check"
     if module_name == "examples.gcp.main":
+        health, dependency = application_entries
+        assert health["severity"] == "INFO"
+        assert health["service_name"] == "example-service"
+        assert health["service_version"] == "1.4.2"
+        assert health["health_status"] == "ok"
+        assert dependency["severity"] == "DEBUG"
+        assert dependency["dependency"] == "database"
+        assert dependency["dependency_status"] == "ok"
+        assert dependency["check_duration_ms"] == 3
         assert access["severity"] == "INFO"
         assert access["logging.googleapis.com/trace"] == TRACE_ID
         assert access["httpRequest"]["status"] == 200

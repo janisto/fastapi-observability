@@ -1,20 +1,59 @@
-# Repository instructions
+# AGENTS.md
 
-## Documentation
+Instructions for coding agents working in this repository.
 
-- `README.md` is primarily for human users and contributors. Keep installation,
-  usage, public API, and operational guidance there.
-- Put instructions needed specifically by coding agents in `AGENTS.md`. When
-  agent-specific guidance changes, update this file rather than adding it to
-  `README.md`.
+`README.md` is for human users and contributors: setup, capabilities,
+architecture, operations, and contribution entry points. `AGENTS.md` is for
+coding agents: execution rules, implementation constraints, and validation
+policy. Do not duplicate agent instructions into the README or turn this file
+into human onboarding documentation.
 
-## Engineering changes
+## Engineering priorities
 
+- Correctness first, then readability and maintainability, then performance.
 - Inspect the relevant implementation, callers, and existing tests before
-  editing.
+  changing behavior.
 - Prefer the smallest safe change that solves the problem.
-- Reuse existing patterns and utilities, refactoring them when needed, instead
-  of creating parallel abstractions or adding dependencies.
+- Reuse existing local patterns and utilities, refactoring them when needed,
+  instead of creating parallel abstractions or adding dependencies.
+- State the failure mode before architectural, security, persistence, or
+  production-impacting changes.
+- Do not declare completion until implementation, validation, and remaining
+  risks are reported.
+- Keep source comments and documentation concise. Do not add progress
+  narration, generated banners, emojis, or speculative TODOs.
+
+## Pull requests
+
+- Format titles as `type[optional scope]: description`. Prefer no scope;
+  include one only when it materially improves clarity.
+- Use `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, `chore`,
+  or `revert` as the type. Example: `feat: add response size field`.
+- Keep each pull request focused. In the body, explain why the change is
+  needed, what changed, how it was validated, and any remaining risk.
+- Keep the title suitable for the final squash or merge commit.
+- Add applicable user-visible changes under `CHANGELOG.md` -> `[Unreleased]`.
+  Skip entries for changes without meaningful user impact.
+
+## Commits
+
+- Follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/).
+- Prefer no scope; include one only when it materially improves clarity. Write
+  a short, imperative description. Example: `fix: preserve request ID`.
+- Mark breaking changes with `!` and explain them in a `BREAKING CHANGE:`
+  footer.
+- Before committing, run `just qa` and `git diff --check`.
+
+## Repository constraints
+
+- Keep imports side-effect free and preserve the documented Python, FastAPI,
+  Starlette, and HTTPX2 support lines.
+- Do not add a global logging configuration, OpenTelemetry, a cloud SDK, or
+  ownership of application exception responses.
+- Do not log queries, bodies, credentials, cookies, arbitrary headers, or
+  untrusted forwarded IPs.
+- Treat exported APIs, structured log fields, defaults, and supported runtime
+  versions as compatibility contracts.
 
 ## Public API and documentation
 
@@ -24,35 +63,7 @@
   ISO-dated bracketed versions, applicable change categories, and comparison
   links.
 - Keep examples minimal, runnable, and aligned with the documented API.
-- Treat exported APIs, structured log fields, defaults, and supported runtime
-  versions as compatibility contracts.
-- Document breaking changes explicitly and provide migration guidance when
-  applicable.
-
-## Pull requests
-
-- Use `<type>[optional scope]: <description>` for the title. Prefer no scope;
-  include one only when it materially improves clarity.
-- Example: `feat: add response size field`.
-- Use `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, `chore`,
-  or `revert` as the type.
-- Keep each pull request focused. In the body, explain why the change is needed,
-  what changed, how it was validated, and any remaining risk.
-- Before opening a pull request, add applicable user-visible changes under
-  `CHANGELOG.md` → `[Unreleased]`. Skip entries for changes without meaningful
-  user impact.
-- Keep the title suitable for the final squash or merge commit.
-
-## Commits
-
-- Follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/).
-- Prefer no scope; include one only when it materially improves clarity. Write a
-  short, imperative description.
-- Example: `fix: preserve request ID`.
-- Mark breaking changes with `!` and explain them in a `BREAKING CHANGE:` footer.
-- Before committing, run `just check` and `git diff --check`.
-- Run `just package-check` when distribution contents or release metadata
-  change.
+- Document breaking changes explicitly and provide migration guidance.
 
 ## Tests
 
@@ -63,18 +74,29 @@
 - Run `just mutation` when changing `parse_traceparent` or its focused tests.
   Add tests for meaningful surviving behavior, not equivalent transformations.
 
+## Workflow security
+
+- Use full release tags for third-party GitHub Actions, for example
+  `actions/checkout@v7.0.0`. Do not use commit SHAs, moving branches, or major
+  version tags.
+- `just qa` must run `actionlint` and `zizmor --offline .` in addition to the
+  repository's language checks.
+- Keep `.github/zizmor.yml` aligned with the exact-tag policy and the
+  one-day Dependabot cooldown.
+
 ## Releases
 
-- Prepare releases through a pull request titled
-  `chore: prepare vX.Y.Z`.
+- Prepare releases through a pull request titled `chore: prepare vX.Y.Z`.
 - Update `pyproject.toml`, `tests/check_distribution.py`, `uv.lock`,
   `CHANGELOG.md`, and public documentation together.
-- Run `just install`, `uv lock --check`, `just check`, `just package-check`, and
+- Run `just install`, `uv lock --check`, `just qa`, `just package-check`, and
   `git diff --check`.
+- Run `just package-check` whenever distribution contents or release metadata
+  change.
 - Merge a green pull request to `main`, then release the exact reviewed commit
   with tag `vX.Y.Z`.
-- When drafting a new GitHub Release, use **Generate release notes** and mark it
-  as **Latest**. Edit the generated notes when needed for accuracy and alignment
-  with `CHANGELOG.md` before publishing.
+- When drafting a stable GitHub Release, use **Generate release notes** and mark
+  it as **Latest**. Edit the notes for accuracy and alignment with
+  `CHANGELOG.md` before publishing.
 - Never move an existing release tag or overwrite a published PyPI version.
 - Follow `RELEASE.md` for trusted publishing and post-publish verification.
