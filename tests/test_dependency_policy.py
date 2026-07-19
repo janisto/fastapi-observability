@@ -1,7 +1,7 @@
 import ast
 import re
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pytest
@@ -10,10 +10,80 @@ ROOT = Path(__file__).parents[1]
 FULL_ACTION_VERSION = re.compile(r"^[^@\s]+@v\d+\.\d+\.\d+$")
 USES_CLAUSE = re.compile(r"^\s*(?:-\s+)?uses:\s*([^\s#]+)")
 WORKFLOW_PATTERNS = ("*.yml", "*.yaml")
+GITHUB_REST_CALLER = re.compile(
+    r"\bgh\s+api\b|\b(?:github|octokit)\.(?:rest\b|request\s*\(|paginate\s*\()|"
+    r"https?://api\.github\.com\b"
+)
+LOCKED_GITHUB_HEADER = re.compile(r"X-GitHub-Api-Version[\"']?\s*(?::|=|\s)\s*[\"']?2026-03-10\b")
+AUTOMATED_SUFFIXES = {
+    ".bash",
+    ".cjs",
+    ".go",
+    ".js",
+    ".json",
+    ".mjs",
+    ".py",
+    ".rs",
+    ".sh",
+    ".toml",
+    ".ts",
+    ".yaml",
+    ".yml",
+    ".zsh",
+}
+SKIPPED_POLICY_DIRECTORIES = {
+    ".git",
+    ".venv",
+    "artifacts",
+    "coverage",
+    "dist",
+    "mutants",
+    "node_modules",
+    "target",
+}
 
 
 def _workflow_paths(directory: Path) -> list[Path]:
     return sorted(path for pattern in WORKFLOW_PATTERNS for path in directory.glob(pattern))
+
+
+def _is_automated_policy_path(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    return (
+        normalized != "tests/test_dependency_policy.py"
+        and not normalized.endswith(".md")
+        and (Path(normalized).suffix in AUTOMATED_SUFFIXES or Path(normalized).name == "Justfile")
+    )
+
+
+def _github_api_policy_violations(files: Mapping[str, str]) -> list[str]:
+    violations = []
+    for path, content in files.items():
+        if not _is_automated_policy_path(path):
+            continue
+        lines = content.splitlines()
+        for index, line in enumerate(lines):
+            if GITHUB_REST_CALLER.search(line) is None:
+                continue
+            limit = min(len(lines), index + 12)
+            end = index + 1
+            while end < limit and GITHUB_REST_CALLER.search(lines[end]) is None:
+                end += 1
+            if LOCKED_GITHUB_HEADER.search("\n".join(lines[index:end])) is None:
+                violations.append(f"{path}:{index + 1}")
+    return violations
+
+
+def _repository_policy_files() -> dict[str, str]:
+    files = {}
+    for path in ROOT.rglob("*"):
+        relative = path.relative_to(ROOT)
+        if any(part in SKIPPED_POLICY_DIRECTORIES for part in relative.parts):
+            continue
+        relative_text = relative.as_posix()
+        if path.is_file() and _is_automated_policy_path(relative_text):
+            files[relative_text] = path.read_text()
+    return files
 
 
 def _strings(value: object) -> Iterator[str]:
@@ -107,3 +177,36 @@ def test_workflow_discovery_includes_yml_and_yaml(tmp_path):
     (tmp_path / "two.yaml").touch()
     (tmp_path / "ignored.txt").touch()
     assert [path.name for path in _workflow_paths(tmp_path)] == ["one.yml", "two.yaml"]
+
+
+def test_github_api_policy_passes_without_automated_callers_and_ignores_docs():
+    assert _github_api_policy_violations({"README.md": "Use `gh api` with the locally installed CLI."}) == []
+
+
+def test_github_api_policy_accepts_exact_locked_header():
+    content = """github.request("GET /repos/{owner}/{repo}", {
+  headers: {"X-GitHub-Api-Version": "2026-03-10"},
+})"""
+    assert _github_api_policy_violations({"workflow.py": content}) == []
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        'github.request("GET /repos/{owner}/{repo}")',
+        'github.request("GET /repos/{owner}/{repo}", headers={"X-GitHub-Api-Version": VERSION})',
+        'github.request("GET /repos/{owner}/{repo}", headers={"X-GitHub-Api-Version": "2022-11-28"})',
+    ],
+    ids=["missing", "dynamic", "different"],
+)
+def test_github_api_policy_rejects_unpinned_automated_callers(content):
+    assert _github_api_policy_violations({"client.py": content}) == ["client.py:1"]
+
+
+def test_github_api_policy_checks_each_automated_caller():
+    content = 'github.request("GET /one", headers={"X-GitHub-Api-Version": "2026-03-10"})\ngithub.request("GET /two")'
+    assert _github_api_policy_violations({"client.py": content}) == ["client.py:2"]
+
+
+def test_repository_has_no_unpinned_automated_github_rest_caller():
+    assert _github_api_policy_violations(_repository_policy_files()) == []
