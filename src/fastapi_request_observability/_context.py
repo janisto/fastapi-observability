@@ -12,14 +12,12 @@ from dataclasses import dataclass
 from itertools import count
 from threading import Lock
 
-from .trace import TraceContext, _with_tracestate, parse_traceparent
+from .trace import TraceContext, TraceContextLevel, _with_tracestate, parse_traceparent
 
 RequestIDGenerator = Callable[[], str]
 RequestIDValidator = Callable[[str], bool]
 Header = tuple[bytes, bytes]
 _MAX_REQUEST_ID_LENGTH = 128
-_VISIBLE_ASCII_START = 0x21
-_VISIBLE_ASCII_END = 0x7E
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,11 +96,7 @@ def _new_valid_request_id(generator: RequestIDGenerator, validator: RequestIDVal
 
 
 def _is_valid(validator: RequestIDValidator, value: str) -> bool:
-    if (
-        not value
-        or not value.isascii()
-        or any(not _VISIBLE_ASCII_START <= ord(character) <= _VISIBLE_ASCII_END for character in value)
-    ):
+    if not _default_validate_request_id(value):
         return False
     try:
         return validator(value)
@@ -122,7 +116,7 @@ def _header_values(headers: Sequence[Header], name: str) -> list[str]:
     return [value.decode("latin-1") for key, value in headers if key.lower() == encoded_name]
 
 
-def _build_context(
+def _build_context(  # noqa: PLR0913 - explicit extraction inputs keep framework integration auditable
     headers: Sequence[Header],
     *,
     request_id_header: str,
@@ -130,6 +124,7 @@ def _build_context(
     tracestate_header: str,
     generator: RequestIDGenerator,
     validator: RequestIDValidator,
+    trace_context_level: TraceContextLevel | int = TraceContextLevel.LEVEL_1,
 ) -> RequestContext:
     request_id_values = _header_values(headers, request_id_header)
     incoming_request_id = request_id_values[0] if len(request_id_values) == 1 else ""
@@ -140,7 +135,7 @@ def _build_context(
     )
 
     traceparent_values = _header_values(headers, traceparent_header)
-    trace = parse_traceparent(traceparent_values[0]) if len(traceparent_values) == 1 else None
+    trace = parse_traceparent(traceparent_values[0], trace_context_level) if len(traceparent_values) == 1 else None
     if trace is not None:
         trace = _with_tracestate(trace, _header_values(headers, tracestate_header))
 

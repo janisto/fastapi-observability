@@ -12,15 +12,17 @@ from fastapi_request_observability import (
     RequestContextConfig,
     RequestContextMiddleware,
     TraceContext,
+    TraceContextLevel,
     correlation_id,
     current_request_context,
     parse_traceparent,
     request_id,
+    resolve_trace_context_level,
     trace_context,
 )
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
-TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-01"
+TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-03"
 
 
 class CaptureHandler(logging.Handler):
@@ -71,8 +73,15 @@ async def _smoke_built_middleware():
         sent.append(message.copy())
 
     app = RequestContextMiddleware(
-        AccessLogMiddleware(endpoint, AccessLogConfig(logger=logger)),
-        RequestContextConfig(),
+        AccessLogMiddleware(
+            endpoint,
+            AccessLogConfig(
+                logger=logger,
+                capture_path=True,
+                trace_context_level=TraceContextLevel.LEVEL_2,
+            ),
+        ),
+        RequestContextConfig(trace_context_level=TraceContextLevel.LEVEL_2),
     )
     scope = {
         "type": "http",
@@ -96,6 +105,7 @@ async def _smoke_built_middleware():
     assert observed["request_id"] == "smoke-request"
     assert observed["correlation_id"] == TRACE_ID
     assert isinstance(observed["trace"], TraceContext)
+    assert observed["trace"].trace_id_random is True
     assert sent == [
         {
             "type": "http.response.start",
@@ -117,10 +127,12 @@ async def _smoke_built_middleware():
         "request_id": "smoke-request",
         "correlation_id": TRACE_ID,
     }
+    assert handler.entries[0]["trace_id_random"] is True
 
 
 parsed_trace = parse_traceparent(TRACEPARENT)
 assert isinstance(parsed_trace, TraceContext)
+assert resolve_trace_context_level(2) is TraceContextLevel.LEVEL_2
 asyncio.run(_smoke_built_middleware())
 assert request_id() is None
 assert correlation_id() is None

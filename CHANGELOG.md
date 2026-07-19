@@ -7,6 +7,36 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- Added specification-defined GCP profile `0.1.0`, newest-installed resolution,
+  exact pinning through `GcpProfileVersion`, and resolved-version introspection
+  on both formatter and access configuration.
+- Added independent `capture_path`, `capture_peer_ip`, and
+  `capture_user_agent` opt-ins.
+- Added explicit W3C Trace Context Level 2 configuration, including its
+  `tracestate` key grammar and `trace_id_random` projection. Level 1 remains the
+  default.
+
+### Changed
+
+- Disabled concrete path, direct peer IP, and User-Agent capture by default;
+  renamed the opt-in portable peer field from `remote_ip` to `peer_ip`, and
+  narrowed GCP `requestUrl` to the opt-in query-free path without authority.
+- Aligned the GCP health fixture with service version `1.0.0` and added exact,
+  deterministic DEBUG and INFO route tests.
+- Canonicalized retained `tracestate` field-lines and restricted custom
+  request-ID validators to narrowing the package's URI-unreserved baseline.
+- Treated dash-delimited future-version `traceparent` suffixes as opaque while
+  retaining strict validation of the common 55-character prefix.
+- Made access status authoritative to accepted ASGI response-start messages,
+  removed synthetic 200/500 fallbacks, and added standard abnormal terminal
+  reasons with `ERROR` severity while preserving original failures.
+- Normalized nested mapping keys before JSON encoding and retained the first
+  value on a normalized-name collision, preventing duplicate raw JSON members.
+- **Breaking:** Canonicalized explicit FastAPI route converters to portable
+  `{name}` and `{*name}` templates while omitting ambiguous native forms.
+
 ## [1.0.1] - 2026-07-17
 
 ### Added

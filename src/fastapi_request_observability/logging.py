@@ -21,6 +21,28 @@ class LoggingPreset(StrEnum):
     AZURE = "azure"
 
 
+class GcpProfileVersion(StrEnum):
+    """Specification-defined Google Cloud structured-stdout profiles."""
+
+    V0_1_0 = "0.1.0"
+
+
+def _resolve_gcp_profile_version(
+    preset: LoggingPreset,
+    version: GcpProfileVersion | str | None,
+) -> GcpProfileVersion | None:
+    if preset is not LoggingPreset.GCP:
+        if version is not None:
+            raise ValueError("gcp_profile_version requires LoggingPreset.GCP")
+        return None
+    if version is None:
+        return GcpProfileVersion.V0_1_0
+    try:
+        return GcpProfileVersion(version)
+    except ValueError as error:
+        raise ValueError("unsupported GCP profile version; expected 0.1.0") from error
+
+
 _STANDARD_RECORD_FIELDS = frozenset(logging.makeLogRecord({}).__dict__)
 _ACCESS_FIELDS_KEY = "_fastapi_request_observability_access_fields"
 _RESERVED_FIELDS = frozenset(
@@ -38,6 +60,7 @@ _RESERVED_FIELDS = frozenset(
         "parent_id",
         "trace_flags",
         "trace_sampled",
+        "trace_id_random",
         "logging.googleapis.com/trace",
         "logging.googleapis.com/trace_sampled",
         "logging.googleapis.com/spanId",
@@ -50,6 +73,8 @@ _RESERVED_FIELDS = frozenset(
         "operation_id",
         "status",
         "duration_ms",
+        "terminal_reason",
+        "peer_ip",
         "remote_ip",
         "user_agent",
         "error",
@@ -67,11 +92,13 @@ class JSONFormatter(logging.Formatter):
         preset: LoggingPreset = LoggingPreset.DEFAULT,
         *,
         include_source: bool = False,
+        gcp_profile_version: GcpProfileVersion | str | None = None,
     ) -> None:
         """Initialize formatting and provider-specific field behavior."""
         super().__init__()
         self.preset = preset
         self.include_source = include_source
+        self.gcp_profile_version = _resolve_gcp_profile_version(preset, gcp_profile_version)
 
     @override
     def format(self, record: logging.LogRecord) -> str:
@@ -136,6 +163,8 @@ def _context_fields(
             "trace_sampled": trace.sampled,
         }
     )
+    if trace.trace_id_random is not None:
+        fields["trace_id_random"] = trace.trace_id_random
     if preset is LoggingPreset.GCP:
         fields["logging.googleapis.com/trace"] = trace.trace_id
         fields["logging.googleapis.com/trace_sampled"] = trace.sampled
@@ -160,7 +189,12 @@ def _json_safe(value: Any, seen: set[int] | None = None) -> Any:  # noqa: ANN401
     seen.add(identity)
     try:
         if isinstance(value, dict):
-            return {_json_key(key): _json_safe(item, seen) for key, item in value.items()}
+            normalized: dict[str, Any] = {}
+            for key, item in value.items():
+                normalized_key = _json_key(key)
+                if normalized_key not in normalized:
+                    normalized[normalized_key] = _json_safe(item, seen)
+            return normalized
         if isinstance(value, (list, tuple)):
             return [_json_safe(item, seen) for item in value]
         return f"<unsupported:{type(value).__module__}.{type(value).__qualname__}>"
@@ -168,9 +202,15 @@ def _json_safe(value: Any, seen: set[int] | None = None) -> Any:  # noqa: ANN401
         seen.remove(identity)
 
 
-def _json_key(key: Any) -> Any:  # noqa: ANN401
-    if key is None or isinstance(key, (str, bool, int)):
+def _json_key(key: Any) -> str:  # noqa: ANN401
+    if isinstance(key, str):
         return key
+    if key is None:
+        return "null"
+    if isinstance(key, bool):
+        return "true" if key else "false"
+    if isinstance(key, int):
+        return str(key)
     if isinstance(key, float) and math.isfinite(key):
-        return key
+        return str(key)
     return f"<key:{type(key).__module__}.{type(key).__qualname__}>"

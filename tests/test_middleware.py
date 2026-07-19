@@ -9,6 +9,7 @@ from fastapi_request_observability import (
     RequestContext,
     RequestContextConfig,
     RequestContextMiddleware,
+    TraceContextLevel,
     correlation_id,
     current_request_context,
     request_id,
@@ -20,6 +21,13 @@ from tests._client import asgi_client
 TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 OTHER_TRACEPARENT = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-00"
 DEFAULT_GENERATED_REQUEST_ID = re.compile(r"[A-Za-z0-9._~-]{32}")
+
+
+def test_request_context_config_resolves_trace_level_and_rejects_unsupported_values():
+    assert RequestContextConfig().trace_context_level is TraceContextLevel.LEVEL_1
+    assert RequestContextConfig(trace_context_level=2).trace_context_level is TraceContextLevel.LEVEL_2
+    with pytest.raises(ValueError, match="unsupported trace context level"):
+        RequestContextConfig(trace_context_level=3)
 
 
 async def test_fastapi_request_context_state_header_and_accessors():
@@ -103,6 +111,29 @@ async def test_trace_accessors_expose_validated_context_only_during_request():
     }
     assert trace_context() is None
     assert current_request_context() is None
+
+
+async def test_explicit_level_2_exposes_random_flag_during_request():
+    app = FastAPI()
+    app.add_middleware(
+        RequestContextMiddleware,
+        config=RequestContextConfig(trace_context_level=TraceContextLevel.LEVEL_2),
+    )
+
+    @app.get("/")
+    async def root():
+        trace = trace_context()
+        assert trace is not None
+        return {
+            "trace_context_level": trace.trace_context_level,
+            "trace_sampled": trace.sampled,
+            "trace_id_random": trace.trace_id_random,
+        }
+
+    async with asgi_client(app) as client:
+        response = await client.get("/", headers={"traceparent": TRACEPARENT[:-2] + "03"})
+
+    assert response.json() == {"trace_context_level": 2, "trace_sampled": True, "trace_id_random": True}
 
 
 async def test_custom_trace_headers_override_standard_header_names():

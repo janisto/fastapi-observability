@@ -235,10 +235,14 @@ PyPI token or interactive credential.
 
 Check the GitHub release and immutable tag:
 
+Every direct `gh api` call in this repository must send
+`X-GitHub-Api-Version: 2026-03-10`.
+
 ```bash
 gh release view "v$VERSION" \
   --json tagName,name,url,isDraft,isImmutable,isPrerelease,publishedAt,targetCommitish
 gh api \
+  -H "X-GitHub-Api-Version: 2026-03-10" \
   "repos/janisto/fastapi-observability/git/ref/tags/v$VERSION" \
   --jq .object.sha
 ```

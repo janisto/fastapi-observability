@@ -3,7 +3,7 @@ import logging
 
 import pytest
 
-from fastapi_request_observability import JSONFormatter, LoggingPreset
+from fastapi_request_observability import GcpProfileVersion, JSONFormatter, LoggingPreset, TraceContextLevel
 from fastapi_request_observability._context import RequestContext, _bind_context, _reset_context
 from fastapi_request_observability.trace import parse_traceparent
 
@@ -20,6 +20,14 @@ PROVIDER_FIELDS = {
 
 class UnsupportedValue:
     pass
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        assert key not in result, f"duplicate raw JSON key: {key}"
+        result[key] = value
+    return result
 
 
 def _record(level=logging.INFO, *, name="test.logger", message="hello %s", args=("world",), **extra):
@@ -41,6 +49,18 @@ def test_compact_json_base_fields_and_source():
 
 def test_default_formatter_omits_opt_in_source_field():
     assert "source" not in json.loads(JSONFormatter().format(_record()))
+
+
+def test_gcp_formatter_resolves_latest_preserves_pin_and_rejects_unsupported_versions():
+    latest = JSONFormatter(LoggingPreset.GCP)
+    pinned = JSONFormatter(LoggingPreset.GCP, gcp_profile_version="0.1.0")
+    assert latest.gcp_profile_version is GcpProfileVersion.V0_1_0
+    assert pinned.gcp_profile_version is GcpProfileVersion.V0_1_0
+    assert JSONFormatter().gcp_profile_version is None
+    with pytest.raises(ValueError, match="unsupported GCP profile version"):
+        JSONFormatter(LoggingPreset.GCP, gcp_profile_version="0.2.0")
+    with pytest.raises(ValueError, match=r"requires LoggingPreset\.GCP"):
+        JSONFormatter(gcp_profile_version=GcpProfileVersion.V0_1_0)
 
 
 @pytest.mark.parametrize("level", [logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL])
@@ -97,6 +117,13 @@ def test_json_serializable_non_string_mapping_keys_are_preserved():
     assert parsed["structured"][f"<key:{unsupported_type}>"] == "custom"
 
 
+def test_mapping_keys_are_normalized_before_encoding_without_raw_duplicates():
+    output = JSONFormatter().format(_record(structured={1: {2: "first", "2": "nested-conflict"}, "1": "top-conflict"}))
+
+    parsed = json.loads(output, object_pairs_hook=_unique_object)
+    assert parsed["structured"] == {"1": {"2": "first"}}
+
+
 def test_reserved_extra_fields_are_ignored():
     record = _record()
     spoofed_fields = {
@@ -112,6 +139,7 @@ def test_reserved_extra_fields_are_ignored():
         "parent_id": "spoofed",
         "trace_flags": "spoofed",
         "trace_sampled": "spoofed",
+        "trace_id_random": "spoofed",
         "logging.googleapis.com/trace": "spoofed",
         "logging.googleapis.com/trace_sampled": "spoofed",
         "logging.googleapis.com/spanId": "spoofed",
@@ -124,6 +152,7 @@ def test_reserved_extra_fields_are_ignored():
         "operation_id": "spoofed",
         "status": "spoofed",
         "duration_ms": "spoofed",
+        "peer_ip": "spoofed",
         "remote_ip": "spoofed",
         "user_agent": "spoofed",
         "error": "spoofed",
@@ -198,6 +227,23 @@ def test_context_and_provider_shapes(preset, expected):
         assert "severity" not in parsed
 
 
+def test_level_2_context_projects_random_flag_and_level_1_omits_it():
+    level_1 = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-03")
+    level_2 = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-03", TraceContextLevel.LEVEL_2)
+    assert level_1 is not None
+    assert level_2 is not None
+    for trace, expected in ((level_1, None), (level_2, True)):
+        token = _bind_context(RequestContext("request-1", TRACE_ID, trace))
+        try:
+            parsed = json.loads(JSONFormatter().format(_record()))
+        finally:
+            _reset_context(token)
+        if expected is None:
+            assert "trace_id_random" not in parsed
+        else:
+            assert parsed["trace_id_random"] is expected
+
+
 @pytest.mark.parametrize("preset", list(LoggingPreset))
 def test_no_context_has_no_correlation_or_provider_fields(preset):
     parsed = json.loads(JSONFormatter(preset).format(_record()))
@@ -209,6 +255,7 @@ def test_no_context_has_no_correlation_or_provider_fields(preset):
             "parent_id",
             "trace_flags",
             "trace_sampled",
+            "trace_id_random",
             *PROVIDER_FIELDS,
         }
         & parsed.keys()

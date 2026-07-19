@@ -50,6 +50,12 @@ app.add_middleware(RequestContextMiddleware)
 No Google Cloud project ID is required. With valid W3C context,
 `logging.googleapis.com/trace` contains the raw trace ID.
 
+Trace Context Level 1 is the default. To opt in to Level 2, pass the same
+`TraceContextLevel.LEVEL_2` value to `AccessLogConfig(trace_context_level=...)`
+and `RequestContextConfig(trace_context_level=...)`. Level 2 adds the portable
+`trace_id_random` field derived from trace-flags bit one; it does not assert
+that this application generated the incoming trace ID.
+
 ## Run the canonical GCP example
 
 ```bash
@@ -76,9 +82,9 @@ as the explicit operation ID.
 Representative GCP fields:
 
 ```json
-{"severity":"INFO","logger":"examples.gcp.main","message":"health check","service_name":"example-service","service_version":"1.4.2","health_status":"ok","request_id":"demo-123","correlation_id":"4bf92f3577b34da6a3ce929d0e0e4736"}
+{"severity":"INFO","logger":"examples.gcp.main","message":"health check","service_name":"example-service","service_version":"1.0.0","health_status":"ok","request_id":"demo-123","correlation_id":"4bf92f3577b34da6a3ce929d0e0e4736"}
 {"severity":"DEBUG","logger":"examples.gcp.main","message":"dependency check","dependency":"database","dependency_status":"ok","check_duration_ms":3,"request_id":"demo-123","correlation_id":"4bf92f3577b34da6a3ce929d0e0e4736"}
-{"severity":"INFO","message":"request completed","request_id":"demo-123","correlation_id":"4bf92f3577b34da6a3ce929d0e0e4736","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","logging.googleapis.com/trace":"4bf92f3577b34da6a3ce929d0e0e4736","logging.googleapis.com/trace_sampled":true,"method":"GET","path":"/health","path_template":"/health","operation_id":"health_check","status":200}
+{"severity":"INFO","message":"request completed","request_id":"demo-123","correlation_id":"4bf92f3577b34da6a3ce929d0e0e4736","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","logging.googleapis.com/trace":"4bf92f3577b34da6a3ce929d0e0e4736","logging.googleapis.com/trace_sampled":true,"method":"GET","path_template":"/health","operation_id":"health_check","status":200}
 ```
 
 The package does not create spans and therefore does not manufacture
@@ -140,7 +146,8 @@ levels, and exception information.
 - Keep runnable examples limited to required package wiring.
 - Use the same preset for `JSONFormatter` and `AccessLogConfig`.
 - Add access middleware before request-context middleware.
-- Group logs by `path_template`, not the concrete request path.
+- Group logs by `path_template`; enable concrete path capture only when its
+  privacy and cardinality cost is intentional.
 - Disable duplicate ASGI-server access logs when this package owns them.
 - Keep provider tracing SDKs separate from this correlation package.
 - Never place secrets or raw bodies in log fields.
@@ -151,4 +158,5 @@ levels, and exception information.
 - [Google Cloud: Link log entries with traces](https://docs.cloud.google.com/trace/docs/trace-log-integration)
 - [Google Cloud Trace release notes](https://docs.cloud.google.com/trace/docs/release-notes)
 - [Google Cloud structured logging](https://docs.cloud.google.com/logging/docs/structured-logging)
-- [W3C Trace Context](https://www.w3.org/TR/trace-context/)
+- [W3C Trace Context Level 1 Recommendation](https://www.w3.org/TR/2021/REC-trace-context-1-20211123/)
+- [W3C Trace Context Level 2 Candidate Recommendation Draft](https://www.w3.org/TR/2024/CRD-trace-context-2-20240328/)

@@ -17,6 +17,7 @@ from ._context import (
     _reset_context,
     current_request_context,
 )
+from .trace import TraceContextLevel, resolve_trace_context_level
 
 type _Scope = MutableMapping[str, Any]
 type _Message = MutableMapping[str, Any]
@@ -36,6 +37,7 @@ class RequestContextConfig:
     response_header: str | None = None
     traceparent_header: str = "traceparent"
     tracestate_header: str = "tracestate"
+    trace_context_level: TraceContextLevel | int = TraceContextLevel.LEVEL_1
     request_id_generator: RequestIDGenerator = _default_request_id
     request_id_validator: RequestIDValidator = _default_validate_request_id
     inject_response_header: bool = True
@@ -45,6 +47,11 @@ class RequestContextConfig:
         _validate_header_name(self.request_id_header, "request_id_header")
         _validate_header_name(self.traceparent_header, "traceparent_header")
         _validate_header_name(self.tracestate_header, "tracestate_header")
+        object.__setattr__(
+            self,
+            "trace_context_level",
+            resolve_trace_context_level(self.trace_context_level),
+        )
         if self.response_header is not None:
             _validate_header_name(self.response_header, "response_header")
         if not callable(self.request_id_generator):
@@ -102,6 +109,7 @@ def _context_from_scope(scope: _Scope, config: RequestContextConfig) -> RequestC
         tracestate_header=config.tracestate_header,
         generator=config.request_id_generator,
         validator=config.request_id_validator,
+        trace_context_level=config.trace_context_level,
     )
 
 
