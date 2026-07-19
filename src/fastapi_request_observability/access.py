@@ -11,8 +11,9 @@ from asyncio import CancelledError
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
+from ipaddress import ip_address
 from typing import Any, Literal
-from urllib.parse import quote, quote_from_bytes
+from urllib.parse import quote_from_bytes
 
 from fastapi.routing import APIRoute
 
@@ -57,6 +58,9 @@ TerminalReason = Literal[
 ]
 _CLIENT_ERROR_STATUS = 400
 _SERVER_ERROR_STATUS = 500
+_FIRST_CONTROL_CODEPOINT = 0x20
+_DELETE_CODEPOINT = 0x7F
+_SAFE_STATUS_LEVELS = frozenset({logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL})
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +74,7 @@ class AccessLogConfig:
     capture_path: bool = False
     capture_peer_ip: bool = False
     capture_user_agent: bool = False
+    capture_error: bool = False
     clock: Clock = time.perf_counter
     status_level: StatusLevel | None = None
     extra_fields: ExtraFields | None = None
@@ -87,9 +92,11 @@ class AccessLogConfig:
             "trace_context_level",
             resolve_trace_context_level(self.trace_context_level),
         )
-        for name in ("capture_path", "capture_peer_ip", "capture_user_agent"):
+        for name in ("capture_path", "capture_peer_ip", "capture_user_agent", "capture_error"):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a boolean")
+        if self.message != "request completed":
+            raise ValueError('message must be exactly "request completed"')
         if not callable(self.clock):
             raise TypeError("clock must be callable")
 
@@ -141,7 +148,7 @@ class AccessLogMiddleware:
             fields.update(_context_fields(self.config.preset, context))
             if terminal_reason is not None:
                 fields["terminal_reason"] = terminal_reason
-            if error is not None:
+            if error is not None and self.config.capture_error:
                 fields["error"] = _exception_summary(error)
             if self.config.extra_fields is not None:
                 try:
@@ -152,7 +159,7 @@ class AccessLogMiddleware:
             try:
                 self.config.logger.log(
                     _status_level(self.config, status, terminal_reason),
-                    self.config.message,
+                    "request completed",
                     extra={_ACCESS_FIELDS_KEY: fields},
                 )
             except Exception as logging_error:  # noqa: BLE001 - logging must never alter the response
@@ -208,11 +215,11 @@ def _status_level(
         except Exception as error:  # noqa: BLE001 - application callbacks are untrusted
             _diagnostic("access status-level callback failed", error)
         else:
-            if isinstance(level, int) and not isinstance(level, bool):
+            if isinstance(level, int) and not isinstance(level, bool) and level in _SAFE_STATUS_LEVELS:
                 return level
             _diagnostic(
                 "access status-level callback failed",
-                TypeError("status-level callback must return an integer logging level"),
+                TypeError("status-level callback must return a standard nonterminal logging level"),
             )
     if status >= _SERVER_ERROR_STATUS:
         return logging.ERROR
@@ -283,7 +290,7 @@ def _route_fields(scope: _Scope) -> dict[str, str]:
                 path_template = _canonical_route_template(route_path)
                 if path_template is not None:
                     fields["path_template"] = path_template
-            if isinstance(route, APIRoute) and route.operation_id:
+            if isinstance(route, APIRoute) and _valid_metadata_string(route.operation_id):
                 fields["operation_id"] = route.operation_id
     except Exception as error:  # noqa: BLE001 - framework metadata must not affect traffic
         _diagnostic("access route metadata failed", error)
@@ -310,9 +317,10 @@ def _access_fields(
     fields.update(_route_fields(scope))
 
     client = scope.get("client") if config.capture_peer_ip else None
-    if client:
-        fields["peer_ip"] = client[0]
-    user_agent = _first_header(scope, "user-agent") if config.capture_user_agent else None
+    peer_ip = _canonical_peer_ip(client[0]) if client else None
+    if peer_ip is not None:
+        fields["peer_ip"] = peer_ip
+    user_agent = _single_valid_header(scope, "user-agent") if config.capture_user_agent else None
     if user_agent:
         fields["user_agent"] = user_agent
 
@@ -325,27 +333,46 @@ def _access_fields(
             http_request["status"] = status
         if path is not None:
             http_request["requestUrl"] = path
-        if client:
-            http_request["remoteIp"] = client[0]
+        if peer_ip is not None:
+            http_request["remoteIp"] = peer_ip
         if user_agent:
             http_request["userAgent"] = user_agent
         fields["httpRequest"] = http_request
     return fields
 
 
-def _request_path(scope: _Scope) -> str:
+def _request_path(scope: _Scope) -> str | None:
     raw_path = scope.get("raw_path")
-    if raw_path:
+    if isinstance(raw_path, bytes) and raw_path:
         return quote_from_bytes(raw_path, safe="/%:@-._~!$&'()*+,;=")
-    return quote(scope.get("path") or "/", safe="/:@-._~!$&'()*+,;=")
-
-
-def _first_header(scope: _Scope, name: str) -> str | None:
-    target = name.encode("latin-1")
-    for key, value in scope.get("headers", []):
-        if key.lower() == target:
-            return value.decode("latin-1")
     return None
+
+
+def _canonical_peer_ip(value: object) -> str | None:
+    if not isinstance(value, str) or not value or "%" in value:
+        return None
+    try:
+        return str(ip_address(value))
+    except ValueError:
+        return None
+
+
+def _valid_metadata_string(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and not any(
+            ord(character) < _FIRST_CONTROL_CODEPOINT or ord(character) == _DELETE_CODEPOINT for character in value
+        )
+    )
+
+
+def _single_valid_header(scope: _Scope, name: str) -> str | None:
+    target = name.encode("latin-1")
+    values = [value.decode("latin-1") for key, value in scope.get("headers", []) if key.lower() == target]
+    if len(values) != 1 or not _valid_metadata_string(values[0]):
+        return None
+    return values[0]
 
 
 def _protobuf_duration(duration_ms: float) -> str:

@@ -116,16 +116,22 @@ def test_invalid_generator_is_retried_then_safe_fallback_is_used():
         calls += 1
         return "invalid value"
 
-    generated = _new_valid_request_id(invalid_generator, _default_validate_request_id)
+    generated = _new_valid_request_id(invalid_generator)
     assert calls == 2
     _assert_default_generated_request_id(generated)
 
 
-def test_validator_rejecting_every_candidate_uses_safe_fallback():
-    generated = _new_valid_request_id(lambda: "rejected", lambda _value: False)
+def test_custom_validator_rejects_only_caller_input_not_generated_candidates():
+    context = _build_context(
+        [(b"x-request-id", b"caller")],
+        request_id_header="X-Request-ID",
+        traceparent_header="traceparent",
+        tracestate_header="tracestate",
+        generator=lambda: "generated",
+        validator=lambda _value: False,
+    )
 
-    assert generated != "rejected"
-    _assert_default_generated_request_id(generated)
+    assert context.request_id == "generated"
 
 
 def test_generator_exception_is_retried_before_falling_back():
@@ -137,14 +143,14 @@ def test_generator_exception_is_retried_before_falling_back():
             raise result
         return result
 
-    assert _new_valid_request_id(flaky_generator, _default_validate_request_id) == "recovered"
+    assert _new_valid_request_id(flaky_generator) == "recovered"
 
 
 def test_custom_generator_exception_uses_fallback():
     def broken_generator():
         raise RuntimeError("broken")
 
-    _assert_default_generated_request_id(_new_valid_request_id(broken_generator, _default_validate_request_id))
+    _assert_default_generated_request_id(_new_valid_request_id(broken_generator))
 
 
 @pytest.mark.parametrize("candidate", [None, 42, b"bytes"])
@@ -156,7 +162,7 @@ def test_non_string_generator_results_are_retried_then_replaced(candidate):
         calls += 1
         return candidate
 
-    generated = _new_valid_request_id(generator, _default_validate_request_id)
+    generated = _new_valid_request_id(generator)
 
     assert calls == 2
     _assert_default_generated_request_id(generated)
@@ -177,19 +183,26 @@ def test_entropy_failure_uses_unique_safe_emergency_ids(monkeypatch):
     _assert_default_generated_request_id(second)
 
 
-def test_validator_exception_uses_safe_fallback():
+def test_validator_exception_rejects_caller_and_uses_configured_generator():
     def broken_validator(_value):
         raise RuntimeError("validator failed")
 
-    generated = _new_valid_request_id(lambda: "candidate", broken_validator)
+    context = _build_context(
+        [(b"x-request-id", b"caller")],
+        request_id_header="X-Request-ID",
+        traceparent_header="traceparent",
+        tracestate_header="tracestate",
+        generator=lambda: "generated",
+        validator=broken_validator,
+    )
 
-    _assert_default_generated_request_id(generated)
+    assert context.request_id == "generated"
 
 
 def test_invalid_package_fallback_is_replaced_by_last_resort_safe_id(monkeypatch):
     monkeypatch.setattr("fastapi_request_observability._context._default_request_id", lambda: "bad value")
 
-    generated = _new_valid_request_id(lambda: "also invalid", _default_validate_request_id)
+    generated = _new_valid_request_id(lambda: "also invalid")
 
     assert generated not in {"bad value", "also invalid"}
     _assert_default_generated_request_id(generated)

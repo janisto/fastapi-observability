@@ -194,15 +194,15 @@ The access record message is `request completed` and includes:
 | Field | Meaning |
 | --- | --- |
 | `method` | HTTP method |
-| `path` | Opt-in escaped concrete path, without query string |
+| `path` | Opt-in escaped wire path, without query string; omitted when ASGI exposes decoded-only path data |
 | `path_template` | Canonical matched template (`{name}` or `{*name}`) when available |
 | `operation_id` | Only an explicitly configured `APIRoute.operation_id` |
 | `status` | Status accepted by the downstream ASGI sender, when observed |
 | `duration_ms` | Handling and streaming time in milliseconds |
 | `terminal_reason` | Standard reason for abnormal completion; absent after normal completion |
-| `peer_ip` | Opt-in direct ASGI client address from `scope["client"][0]` |
-| `user_agent` | Opt-in single incoming user agent |
-| `error` | Observed exception type and message |
+| `peer_ip` | Opt-in canonical direct IP from `scope["client"][0]`; hostnames and zoned values are omitted |
+| `user_agent` | Opt-in single nonempty incoming user agent without control characters |
+| `error` | Opt-in privacy-sensitive exception type and message (`capture_error=True`) |
 
 The default level is `ERROR` for abnormal completion or a normal 5xx,
 `WARNING` for a normal 4xx, and `INFO` otherwise.
@@ -210,9 +210,11 @@ Package and provider fields are reserved: `extra` values and access callbacks
 cannot replace them.
 
 `AccessLogConfig` also accepts independent `capture_path`, `capture_peer_ip`,
-and `capture_user_agent` booleans, all defaulting to `False`; a monotonic
+`capture_user_agent`, and `capture_error` booleans, all defaulting to `False`; a monotonic
 `clock`; a `status_level(status)` callback; a synchronous
-`extra_fields(scope)` callback; and a custom message. Callback and logging
+`extra_fields(scope)` callback; and the compatibility `message` setting, which
+rejects every value except the fixed `request completed`. Rich errors can
+contain secrets and require an explicit privacy decision. Callback and logging
 failures use the default behavior and cannot replace the HTTP response. When
 installed without `RequestContextMiddleware`, access middleware creates
 default request context and adds `X-Request-ID` itself.

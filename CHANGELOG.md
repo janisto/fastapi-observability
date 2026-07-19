@@ -20,6 +20,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Fold every GCP logger level into the five profile severities, reject
+  nonstandard access status levels, and canonicalize or omit direct peer IPs.
 - Disabled concrete path, direct peer IP, and User-Agent capture by default;
   renamed the opt-in portable peer field from `remote_ip` to `peer_ip`, and
   narrowed GCP `requestUrl` to the opt-in query-free path without authority.

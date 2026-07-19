@@ -68,6 +68,25 @@ def test_level_names(level):
     assert json.loads(JSONFormatter().format(_record(level)))["level"] == logging.getLevelName(level)
 
 
+@pytest.mark.parametrize(
+    ("level", "severity"),
+    [
+        (-5, "DEBUG"),
+        (logging.DEBUG, "DEBUG"),
+        (logging.INFO, "INFO"),
+        (logging.WARNING, "WARNING"),
+        (35, "WARNING"),
+        (logging.ERROR, "ERROR"),
+        (logging.CRITICAL, "CRITICAL"),
+        (100, "CRITICAL"),
+    ],
+)
+def test_gcp_levels_are_folded_into_the_portable_severity_vocabulary(level, severity):
+    parsed = json.loads(JSONFormatter(LoggingPreset.GCP).format(_record(level)))
+    assert parsed["severity"] == severity
+    assert "level" not in parsed
+
+
 def test_structured_extras_and_deterministic_unsupported_fallback():
     circular = []
     circular.append(circular)

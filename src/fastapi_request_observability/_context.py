@@ -80,13 +80,13 @@ def _default_validate_request_id(value: str) -> bool:
     return all(character.isalnum() or character in "-._~" for character in value)
 
 
-def _new_valid_request_id(generator: RequestIDGenerator, validator: RequestIDValidator) -> str:
+def _new_valid_request_id(generator: RequestIDGenerator) -> str:
     for _ in range(2):
         try:
             candidate = generator()
         except Exception:  # noqa: BLE001, S112 - application callback failures must not break requests
             continue
-        if isinstance(candidate, str) and _is_valid(validator, candidate):
+        if isinstance(candidate, str) and _default_validate_request_id(candidate):
             return candidate
 
     fallback = _default_request_id()
@@ -129,9 +129,7 @@ def _build_context(  # noqa: PLR0913 - explicit extraction inputs keep framework
     request_id_values = _header_values(headers, request_id_header)
     incoming_request_id = request_id_values[0] if len(request_id_values) == 1 else ""
     selected_request_id = (
-        incoming_request_id
-        if _is_valid(validator, incoming_request_id)
-        else _new_valid_request_id(generator, validator)
+        incoming_request_id if _is_valid(validator, incoming_request_id) else _new_valid_request_id(generator)
     )
 
     traceparent_values = _header_values(headers, traceparent_header)

@@ -27,6 +27,18 @@ class GcpProfileVersion(StrEnum):
     V0_1_0 = "0.1.0"
 
 
+def _gcp_severity(level: int) -> str:
+    if level >= logging.CRITICAL:
+        return "CRITICAL"
+    if level >= logging.ERROR:
+        return "ERROR"
+    if level >= logging.WARNING:
+        return "WARNING"
+    if level >= logging.INFO:
+        return "INFO"
+    return "DEBUG"
+
+
 def _resolve_gcp_profile_version(
     preset: LoggingPreset,
     version: GcpProfileVersion | str | None,
@@ -104,9 +116,10 @@ class JSONFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Return one compact, valid JSON object."""
         level_field = "severity" if self.preset is LoggingPreset.GCP else "level"
+        level = _gcp_severity(record.levelno) if self.preset is LoggingPreset.GCP else record.levelname
         data: dict[str, Any] = {
             "timestamp": _timestamp(record.created),
-            level_field: record.levelname,
+            level_field: level,
             "logger": record.name,
             "message": record.getMessage(),
         }

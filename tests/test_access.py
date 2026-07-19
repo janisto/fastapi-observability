@@ -140,7 +140,7 @@ def _app(
     extra_fields=None,
     clock=None,
     status_level=None,
-    message="request completed",
+    capture_error=False,
 ):
     app = FastAPI()
     config = AccessLogConfig(
@@ -149,10 +149,10 @@ def _app(
         capture_path=True,
         capture_peer_ip=True,
         capture_user_agent=True,
+        capture_error=capture_error,
         extra_fields=extra_fields,
         clock=clock or __import__("time").perf_counter,
         status_level=status_level,
-        message=message,
     )
     app.add_middleware(AccessLogMiddleware, config=config)
     app.add_middleware(RequestContextMiddleware)
@@ -226,12 +226,14 @@ def test_access_config_resolves_latest_preserves_pin_and_validates_new_options()
     with pytest.raises(ValueError, match=r"requires LoggingPreset\.GCP"):
         AccessLogConfig(gcp_profile_version="0.1.0")
     invalid: Any = 1
-    for name in ("capture_path", "capture_peer_ip", "capture_user_agent"):
+    for name in ("capture_path", "capture_peer_ip", "capture_user_agent", "capture_error"):
         kwargs: Any = {name: invalid}
         with pytest.raises(TypeError, match=rf"{name} must be a boolean"):
             AccessLogConfig(**kwargs)
     with pytest.raises(TypeError, match="clock must be callable"):
         AccessLogConfig(clock=invalid)
+    with pytest.raises(ValueError, match="message must be exactly"):
+        AccessLogConfig(message="http request finished")
     with pytest.raises(ValueError, match="unsupported trace context level"):
         AccessLogConfig(trace_context_level=3)
 
@@ -344,6 +346,22 @@ async def test_representative_route_identity_has_stable_cardinality():
     ]
 
 
+async def test_operation_id_with_control_character_is_omitted():
+    handler = JSONCaptureHandler()
+    app = FastAPI()
+    app.add_middleware(AccessLogMiddleware, config=AccessLogConfig(logger=_logger(handler)))
+    app.add_middleware(RequestContextMiddleware)
+
+    @app.get("/control", operation_id="get_control\nforged")
+    async def control():
+        return {"ok": True}
+
+    async with asgi_client(app) as client:
+        assert (await client.get("/control")).status_code == 200
+
+    assert "operation_id" not in handler.entries[0]
+
+
 async def test_application_and_access_records_share_correlation_fields():
     handler = JSONCaptureHandler()
     logger = _logger(handler)
@@ -363,15 +381,6 @@ async def test_application_and_access_records_share_correlation_fields():
     for entry in handler.entries:
         assert entry["request_id"] == "shared"
         assert entry["correlation_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
-
-
-async def test_custom_access_message_replaces_default_message_once():
-    handler = JSONCaptureHandler()
-    async with asgi_client(_app(handler, message="http request finished")) as client:
-        response = await client.get("/items/one")
-
-    assert response.status_code == 200
-    assert [entry["message"] for entry in handler.entries] == ["http request finished"]
 
 
 async def test_access_middleware_reuses_custom_request_context_instead_of_rebuilding_defaults():
@@ -423,16 +432,27 @@ async def test_405_retains_matched_route_template():
     assert handler.entries[0]["path_template"] == "/items/{item_id}"
 
 
-async def test_unhandled_exception_omits_unobserved_outer_500_and_logs_service_error_once():
-    handler = JSONCaptureHandler()
-    async with asgi_client(_app(handler), raise_app_exceptions=False) as client:
+@pytest.mark.parametrize("preset", [LoggingPreset.DEFAULT, LoggingPreset.GCP])
+async def test_unhandled_exception_omits_unobserved_outer_500_and_logs_service_error_once(preset):
+    handler = JSONCaptureHandler(preset)
+    async with asgi_client(_app(handler, preset=preset), raise_app_exceptions=False) as client:
         response = await client.get("/unhandled")
     assert response.status_code == 500
     assert "X-Request-ID" not in response.headers
     assert len(handler.entries) == 1
     assert "status" not in handler.entries[0]
     assert handler.entries[0]["terminal_reason"] == "service_error"
-    assert handler.entries[0]["level"] == "ERROR"
+    severity_field = "severity" if preset is LoggingPreset.GCP else "level"
+    assert handler.entries[0][severity_field] == "ERROR"
+    assert "error" not in handler.entries[0]
+
+
+async def test_rich_error_summary_requires_explicit_opt_in():
+    handler = JSONCaptureHandler()
+    async with asgi_client(_app(handler, capture_error=True), raise_app_exceptions=False) as client:
+        response = await client.get("/unhandled")
+
+    assert response.status_code == 500
     assert handler.entries[0]["error"] == "RuntimeError: boom"
 
 
@@ -465,7 +485,7 @@ async def test_committed_stream_status_is_preserved_and_logged_once():
     assert handler.entries[0]["status"] == 200
     assert handler.entries[0]["terminal_reason"] == "body_error"
     assert handler.entries[0]["level"] == "ERROR"
-    assert handler.entries[0]["error"] == "RuntimeError: stream failed"
+    assert "error" not in handler.entries[0]
 
 
 async def test_streaming_success_preserves_body_and_logs_once():
@@ -614,7 +634,7 @@ async def test_final_response_trailer_send_failure_is_logged_with_committed_stat
     assert handler.entries[0]["status"] == 206
     assert handler.entries[0]["terminal_reason"] == "body_error"
     assert handler.entries[0]["level"] == "ERROR"
-    assert handler.entries[0]["error"] == "OSError: client disconnected before trailers"
+    assert "error" not in handler.entries[0]
     assert request_id() is None
 
 
@@ -788,7 +808,7 @@ async def test_response_start_send_failure_omits_uncommitted_status():
     assert "status" not in handler.entries[0]
     assert handler.entries[0]["terminal_reason"] == "service_error"
     assert handler.entries[0]["level"] == "ERROR"
-    assert handler.entries[0]["error"] == "RuntimeError: send failed"
+    assert "error" not in handler.entries[0]
 
 
 @pytest.mark.asyncio
@@ -818,12 +838,12 @@ async def test_response_body_send_failure_preserves_committed_status_and_reraise
     assert handler.entries[0]["status"] == 202
     assert handler.entries[0]["terminal_reason"] == "body_error"
     assert handler.entries[0]["level"] == "ERROR"
-    assert handler.entries[0]["error"] == "RuntimeError: client disconnected"
+    assert "error" not in handler.entries[0]
     assert request_id() is None
 
 
 @pytest.mark.asyncio
-async def test_exception_with_broken_string_conversion_is_logged_without_replacing_original_error():
+async def test_opted_in_exception_with_broken_string_conversion_is_logged_without_replacing_original_error():
     handler = JSONCaptureHandler()
     error = BrokenStringError()
 
@@ -832,7 +852,9 @@ async def test_exception_with_broken_string_conversion_is_logged_without_replaci
 
     scope = {"type": "http", "method": "GET", "path": "/", "headers": [], "state": {}}
     with pytest.raises(BrokenStringError) as raised:
-        await AccessLogMiddleware(broken, AccessLogConfig(logger=_logger(handler)))(scope, _empty_receive, _discard)
+        await AccessLogMiddleware(broken, AccessLogConfig(logger=_logger(handler), capture_error=True))(
+            scope, _empty_receive, _discard
+        )
 
     assert raised.value is error
     assert "status" not in handler.entries[0]
@@ -855,7 +877,7 @@ async def test_cancellation_logs_once_reraises_and_resets_context():
     assert "status" not in handler.entries[0]
     assert handler.entries[0]["terminal_reason"] == "cancelled"
     assert handler.entries[0]["level"] == "ERROR"
-    assert handler.entries[0]["error"] == "CancelledError"
+    assert "error" not in handler.entries[0]
     assert request_id() is None
 
 
@@ -1094,9 +1116,10 @@ async def test_custom_status_level_receives_resolved_status_and_controls_level()
     assert statuses == [200]
 
 
-async def test_non_integer_status_level_is_diagnosed_and_uses_default_mapping(capsys):
+@pytest.mark.parametrize("invalid_level", [True, 35])
+async def test_invalid_status_level_is_diagnosed_and_uses_default_mapping(invalid_level, capsys):
     handler = JSONCaptureHandler()
-    async with asgi_client(_app(handler, status_level=lambda _status: True)) as client:
+    async with asgi_client(_app(handler, status_level=lambda _status: invalid_level)) as client:
         response = await client.get("/handled")
 
     assert response.status_code == 418
@@ -1288,15 +1311,67 @@ async def test_privacy_capture_options_are_independent(
 
 
 @pytest.mark.parametrize(
+    ("client_host", "expected"),
+    [
+        ("2001:0db8:0:0:0:0:0:1", "2001:db8::1"),
+        ("fe80::1%eth0", None),
+        ("internal.example", None),
+    ],
+)
+async def test_peer_ip_is_canonical_or_omitted_in_core_and_gcp(client_host, expected):
+    handler = JSONCaptureHandler(LoggingPreset.GCP)
+    async with asgi_client(_app(handler, preset=LoggingPreset.GCP), client=(client_host, 443)) as client:
+        response = await client.get("/items/one")
+
+    assert response.status_code == 200
+    entry = handler.entries[0]
+    if expected is None:
+        assert "peer_ip" not in entry
+        assert "remoteIp" not in entry["httpRequest"]
+    else:
+        assert entry["peer_ip"] == expected
+        assert entry["httpRequest"]["remoteIp"] == expected
+
+
+@pytest.mark.parametrize(
+    "values",
+    [[], [b""], [b"agent/1", b"agent/1"], [b"agent/1\x7fforged"]],
+)
+async def test_user_agent_requires_one_nonempty_control_free_field_line(values):
+    handler = JSONCaptureHandler()
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "raw_path": b"/",
+        "headers": [(b"user-agent", value) for value in values],
+        "state": {},
+    }
+    middleware = AccessLogMiddleware(
+        app,
+        AccessLogConfig(logger=_logger(handler), capture_user_agent=True),
+    )
+
+    await middleware(scope, _empty_receive, _discard)
+
+    assert "user_agent" not in handler.entries[0]
+
+
+@pytest.mark.parametrize(
     ("scope", "expected"),
     [
         ({"raw_path": b"/items/%2F%ff", "path": "/items//�"}, "/items/%2F%ff"),
-        ({"path": "/items/é"}, "/items/%C3%A9"),
-        ({"path": "/items/a:b@c;d=e"}, "/items/a:b@c;d=e"),
-        ({"path": ""}, "/"),
+        ({"path": "/items/é"}, None),
+        ({"path": "/items/a:b@c;d=e"}, None),
+        ({"path": ""}, None),
     ],
 )
-def test_request_path_prefers_wire_encoding_and_safely_quotes_fallback(scope, expected):
+def test_request_path_uses_only_wire_encoding(scope, expected):
     assert _request_path(scope) == expected
 
 
