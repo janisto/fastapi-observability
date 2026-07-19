@@ -39,6 +39,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Breaking:** Canonicalized explicit FastAPI route converters to portable
   `{name}` and `{*name}` templates while omitting ambiguous native forms.
 
+### Fixed
+
+- Enforced the `traceparent` input ceiling in UTF-8 bytes and omitted malformed
+  percent-escaped raw paths instead of emitting them.
+
 ## [1.0.1] - 2026-07-17
 
 ### Added

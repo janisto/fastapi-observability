@@ -15,6 +15,11 @@ GITHUB_REST_CALLER = re.compile(
     r"https?://api\.github\.com\b"
 )
 LOCKED_GITHUB_HEADER = re.compile(r"X-GitHub-Api-Version[\"']?\s*(?::|=|\s)\s*[\"']?2026-03-10\b")
+GITHUB_API_HEADER_NAME = re.compile(r"X-GitHub-Api-Version", re.IGNORECASE)
+GITHUB_CLIENT_ALIAS = re.compile(
+    r"\b(?:const\s+|let\s+|var\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=)\s*"
+    r"(?:new\s+)?[^\n]*(?:Octokit|GitHub|Github|octokit|github)\b"
+)
 AUTOMATED_SUFFIXES = {
     ".bash",
     ".cjs",
@@ -56,20 +61,30 @@ def _is_automated_policy_path(path: str) -> bool:
     )
 
 
+def _is_github_api_caller(line: str, aliases: set[str]) -> bool:
+    return GITHUB_REST_CALLER.search(line) is not None or any(
+        re.search(rf"\b{re.escape(alias)}\.(?:rest\b|request\s*\(|paginate\s*\()", line) is not None
+        for alias in aliases
+    )
+
+
 def _github_api_policy_violations(files: Mapping[str, str]) -> list[str]:
     violations = []
     for path, content in files.items():
         if not _is_automated_policy_path(path):
             continue
         lines = content.splitlines()
+        aliases = set(GITHUB_CLIENT_ALIAS.findall(content))
+
         for index, line in enumerate(lines):
-            if GITHUB_REST_CALLER.search(line) is None:
+            if not _is_github_api_caller(line, aliases):
                 continue
             limit = min(len(lines), index + 12)
             end = index + 1
-            while end < limit and GITHUB_REST_CALLER.search(lines[end]) is None:
+            while end < limit and not _is_github_api_caller(lines[end], aliases):
                 end += 1
-            if LOCKED_GITHUB_HEADER.search("\n".join(lines[index:end])) is None:
+            block = "\n".join(lines[index:end])
+            if len(GITHUB_API_HEADER_NAME.findall(block)) != 1 or LOCKED_GITHUB_HEADER.search(block) is None:
                 violations.append(f"{path}:{index + 1}")
     return violations
 
@@ -205,6 +220,19 @@ def test_github_api_policy_rejects_unpinned_automated_callers(content):
 
 def test_github_api_policy_checks_each_automated_caller():
     content = 'github.request("GET /one", headers={"X-GitHub-Api-Version": "2026-03-10"})\ngithub.request("GET /two")'
+    assert _github_api_policy_violations({"client.py": content}) == ["client.py:2"]
+
+
+def test_github_api_policy_rejects_conflicting_versions_in_one_call():
+    content = (
+        'github.request("GET /one", headers={"X-GitHub-Api-Version": "2026-03-10"})\n'
+        'headers["X-GitHub-Api-Version"] = "2022-11-28"'
+    )
+    assert _github_api_policy_violations({"client.py": content}) == ["client.py:1"]
+
+
+def test_github_api_policy_detects_aliased_octokit_caller():
+    content = 'const client = new Octokit()\nclient.request("GET /repos/{owner}/{repo}")'
     assert _github_api_policy_violations({"client.py": content}) == ["client.py:2"]
 
 

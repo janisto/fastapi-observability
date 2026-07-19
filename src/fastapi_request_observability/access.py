@@ -344,7 +344,17 @@ def _access_fields(
 def _request_path(scope: _Scope) -> str | None:
     raw_path = scope.get("raw_path")
     if isinstance(raw_path, bytes) and raw_path:
-        return quote_from_bytes(raw_path, safe="/%:@-._~!$&'()*+,;=")
+        path = quote_from_bytes(raw_path, safe="/%:@-._~!$&'()*+,;=")
+        if not path.startswith("/") or "?" in path or "#" in path:
+            return None
+        index = 0
+        while (index := path.find("%", index)) != -1:
+            if index + 2 >= len(path) or not all(
+                character in "0123456789abcdefABCDEF" for character in path[index + 1 : index + 3]
+            ):
+                return None
+            index += 3
+        return path
     return None
 
 

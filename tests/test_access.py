@@ -1366,6 +1366,8 @@ async def test_user_agent_requires_one_nonempty_control_free_field_line(values):
     ("scope", "expected"),
     [
         ({"raw_path": b"/items/%2F%ff", "path": "/items//�"}, "/items/%2F%ff"),
+        ({"raw_path": b"/objects/bad%2", "path": "/objects/bad%2"}, None),
+        ({"raw_path": b"/objects/bad%GG", "path": "/objects/bad%GG"}, None),
         ({"path": "/items/é"}, None),
         ({"path": "/items/a:b@c;d=e"}, None),
         ({"path": ""}, None),

@@ -77,10 +77,20 @@ def test_future_version_accepts_base_and_opaque_dash_delimited_extension():
     assert parse_traceparent(f"{base}future") is None
 
 
-def test_future_version_accepts_512_character_limit_and_rejects_513():
+def test_future_version_accepts_512_ascii_byte_limit_and_rejects_513():
     base = f"01-{TRACE_ID}-{PARENT_ID}-01"
     assert parse_traceparent(f"{base}-{'x' * 456}") is not None
     assert parse_traceparent(f"{base}-{'x' * 457}") is None
+
+
+def test_future_version_limit_counts_utf8_bytes_not_language_characters():
+    base = f"01-{TRACE_ID}-{PARENT_ID}-01"
+    maximum = f"{base}-{'é' * 228}"
+    assert len(maximum) == 284
+    assert len(maximum.encode()) == 512
+    assert parse_traceparent(maximum) is not None
+    assert len(f"{maximum}x".encode()) == 513
+    assert parse_traceparent(f"{maximum}x") is None
 
 
 @pytest.mark.parametrize("separator_index", [2, 35, 52])
