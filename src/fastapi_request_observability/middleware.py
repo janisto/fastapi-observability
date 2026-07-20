@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, MutableMapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ._context import (
@@ -29,7 +29,7 @@ _MISSING = object()
 _HEADER_NAME_CHARACTERS = frozenset("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class RequestContextConfig:
     """Configure request-ID and trace-context extraction."""
 
@@ -40,7 +40,7 @@ class RequestContextConfig:
     request_id_generator: RequestIDGenerator = _default_request_id
     request_id_validator: RequestIDValidator = _default_validate_request_id
     inject_response_header: bool = True
-    trace_context_level: TraceContextLevel | int = field(default=TraceContextLevel.LEVEL_1, kw_only=True)
+    trace_context_level: TraceContextLevel | int = TraceContextLevel.LEVEL_1
 
     def __post_init__(self) -> None:
         """Validate headers and callbacks eagerly."""

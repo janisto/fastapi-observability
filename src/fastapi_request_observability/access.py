@@ -63,7 +63,7 @@ _DELETE_CODEPOINT = 0x7F
 _SAFE_STATUS_LEVELS = frozenset({logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL})
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AccessLogConfig:
     """Configure access-record emission."""
 
@@ -72,13 +72,12 @@ class AccessLogConfig:
     clock: Clock = time.perf_counter
     status_level: StatusLevel | None = None
     extra_fields: ExtraFields | None = None
-    message: str = "request completed"
-    gcp_profile_version: GcpProfileVersion | str | None = field(default=None, kw_only=True)
-    trace_context_level: TraceContextLevel | int = field(default=TraceContextLevel.LEVEL_1, kw_only=True)
-    capture_path: bool = field(default=False, kw_only=True)
-    capture_peer_ip: bool = field(default=False, kw_only=True)
-    capture_user_agent: bool = field(default=False, kw_only=True)
-    capture_error: bool = field(default=False, kw_only=True)
+    gcp_profile_version: GcpProfileVersion | str | None = None
+    trace_context_level: TraceContextLevel | int = TraceContextLevel.LEVEL_1
+    capture_path: bool = False
+    capture_peer_ip: bool = False
+    capture_user_agent: bool = False
+    capture_error: bool = False
 
     def __post_init__(self) -> None:
         """Validate and freeze effective profile and privacy settings."""
@@ -95,8 +94,6 @@ class AccessLogConfig:
         for name in ("capture_path", "capture_peer_ip", "capture_user_agent", "capture_error"):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a boolean")
-        if self.message != "request completed":
-            raise ValueError('message must be exactly "request completed"')
         if not callable(self.clock):
             raise TypeError("clock must be callable")
 

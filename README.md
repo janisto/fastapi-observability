@@ -214,8 +214,8 @@ cannot replace them.
 `AccessLogConfig` also accepts independent `capture_path`, `capture_peer_ip`,
 `capture_user_agent`, and `capture_error` booleans, all defaulting to `False`; a monotonic
 `clock`; a `status_level(status)` callback; a synchronous
-`extra_fields(scope)` callback; and the compatibility `message` setting, which
-rejects every value except the fixed `request completed`. Rich errors can
+`extra_fields(scope)` callback. The terminal message is fixed to
+`request completed` and is not configurable. Rich errors can
 contain secrets and require an explicit privacy decision. Callback and logging
 failures use the default behavior and cannot replace the HTTP response. When
 installed without `RequestContextMiddleware`, access middleware creates
@@ -342,9 +342,9 @@ guidance. The package does not configure logging at import time and does not
 claim ownership of exception responses.
 
 The current Unreleased contract changes are reserved for `2.0.0`; see the
-changelog migration section before upgrading a 1.x application. Existing
-positional configuration arguments retain their 1.x order, while new settings
-are keyword-only.
+changelog migration section before upgrading a 1.x application. Version 2
+configuration and public value objects are keyword-only and expose no v1
+argument-order or option compatibility shims.
 
 Repository tests use HTTPX2 directly with its asynchronous ASGI transport.
 Deprecated HTTPX and FastAPI/Starlette `TestClient` are intentionally excluded.

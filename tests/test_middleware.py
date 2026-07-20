@@ -30,21 +30,32 @@ def test_request_context_config_resolves_trace_level_and_rejects_unsupported_val
         RequestContextConfig(trace_context_level=3)
 
 
-def test_request_context_config_preserves_the_published_positional_layout():
+def test_request_context_config_rejects_the_removed_v1_positional_layout():
     def generator():
         return "generated"
 
     def validator(value):
         return value == "allowed"
 
+    with pytest.raises(TypeError, match="takes 1 positional argument"):
+        RequestContextConfig(
+            "X-Correlation-ID",  # ty: ignore[too-many-positional-arguments]
+            "X-Response-ID",
+            "x-traceparent",
+            "x-tracestate",
+            generator,
+            validator,
+            False,  # noqa: FBT003 - deliberate v1 call-shape rejection
+        )
+
     config = RequestContextConfig(
-        "X-Correlation-ID",
-        "X-Response-ID",
-        "x-traceparent",
-        "x-tracestate",
-        generator,
-        validator,
-        False,  # noqa: FBT003 - regression coverage for the published positional API
+        request_id_header="X-Correlation-ID",
+        response_header="X-Response-ID",
+        traceparent_header="x-traceparent",
+        tracestate_header="x-tracestate",
+        request_id_generator=generator,
+        request_id_validator=validator,
+        inject_response_header=False,
     )
     assert config.request_id_header == "X-Correlation-ID"
     assert config.response_header == "X-Response-ID"
@@ -346,7 +357,7 @@ async def test_nested_asgi_request_gets_independent_context_and_restores_parent(
 
 @pytest.mark.asyncio
 async def test_existing_scope_context_is_reused_without_rebuilding_or_replacing_it():
-    upstream = RequestContext("upstream-request", "upstream-correlation")
+    upstream = RequestContext(request_id="upstream-request", correlation_id="upstream-correlation")
     observed = None
     sent = []
 
@@ -375,7 +386,7 @@ async def test_existing_scope_context_is_reused_without_rebuilding_or_replacing_
 
 @pytest.mark.asyncio
 async def test_cleanup_preserves_scope_context_replaced_by_downstream_app():
-    replacement = RequestContext("downstream-request", "downstream-correlation")
+    replacement = RequestContext(request_id="downstream-request", correlation_id="downstream-correlation")
 
     async def app(scope, _receive, send):
         assert request_id() == "incoming-request"

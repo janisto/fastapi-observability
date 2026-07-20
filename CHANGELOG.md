@@ -8,9 +8,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ## [Unreleased]
 
 The changes in this section target `2.0.0` and must not be published on the
-`1.x` release line. Existing positional `AccessLogConfig` and
-`RequestContextConfig` arguments remain source-compatible; new settings are
-keyword-only.
+`1.x` release line. Version 2 intentionally does not preserve v1 positional
+constructor layouts or compatibility-only options.
 
 ### Migration from 1.x
 
@@ -20,9 +19,12 @@ keyword-only.
 - Rename consumers of `remote_ip` to `peer_ip`. The new value is the direct ASGI
   peer only; GCP `requestUrl` contains at most the query-free path and never an
   authority.
-- Remove custom access-record messages and use the fixed
-  `"request completed"` message. Move application-specific text to application
-  log events.
+- Remove the v1 access-record `message` setting. Version 2 always uses
+  `"request completed"`; move application-specific text to application log
+  events.
+- Refactor `AccessLogConfig`, `RequestContextConfig`, `RequestContext`, and
+  `TraceContext` construction to keyword arguments; v1 positional call shapes
+  are rejected.
 - Restrict access status callbacks to the supported five-level vocabulary and
   update abnormal-record queries to use authoritative response status,
   standardized terminal reasons, and `ERROR` severity.
@@ -45,6 +47,11 @@ keyword-only.
   default.
 
 ### Changed
+
+- Removed v1 positional-constructor and fixed-value option shims so the v2
+  surface has one explicit configuration form.
+- Set distribution and lock metadata to `2.0.0` so package validation cannot
+  produce a breaking artifact mislabeled for the v1 release line.
 
 - Fold every GCP logger level into the five profile severities, reject
   nonstandard access status levels, and canonicalize or omit direct peer IPs.
@@ -73,8 +80,7 @@ keyword-only.
   `traceparent` input to raise `UnicodeEncodeError`.
 - Preserved sampling while omitting the Level 2 random flag for unknown future
   `traceparent` versions.
-- Preserved the published positional constructor layouts and rejected
-  mismatched composed trace-level configuration.
+- Rejected mismatched composed trace-level configuration.
 
 ## [1.0.1] - 2026-07-17
 

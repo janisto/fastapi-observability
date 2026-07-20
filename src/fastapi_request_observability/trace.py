@@ -43,7 +43,7 @@ def resolve_trace_context_level(value: TraceContextLevel | int | None) -> TraceC
         raise ValueError("unsupported trace context level; expected 1 or 2") from error
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TraceContext:
     """A validated incoming W3C ``traceparent`` value."""
 

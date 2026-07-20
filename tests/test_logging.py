@@ -224,7 +224,7 @@ def test_exception_stacktrace():
 def test_context_and_provider_shapes(preset, expected):
     trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01")
     assert trace is not None
-    token = _bind_context(RequestContext("request-1", TRACE_ID, trace))
+    token = _bind_context(RequestContext(request_id="request-1", correlation_id=TRACE_ID, trace_context=trace))
     try:
         parsed = json.loads(JSONFormatter(preset).format(_record()))
     finally:
@@ -252,7 +252,7 @@ def test_level_2_context_projects_random_flag_and_level_1_omits_it():
     assert level_1 is not None
     assert level_2 is not None
     for trace, expected in ((level_1, None), (level_2, True)):
-        token = _bind_context(RequestContext("request-1", TRACE_ID, trace))
+        token = _bind_context(RequestContext(request_id="request-1", correlation_id=TRACE_ID, trace_context=trace))
         try:
             parsed = json.loads(JSONFormatter().format(_record()))
         finally:

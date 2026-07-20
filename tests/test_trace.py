@@ -43,7 +43,13 @@ def test_trace_context_level_defaults_resolves_and_rejects_unsupported_values():
 def test_parse_traceparent_flags(flags, sampled):
     value = f"00-{TRACE_ID}-{PARENT_ID}-{flags}"
     trace = parse_traceparent(value)
-    assert trace == TraceContext(TRACE_ID, PARENT_ID, flags, sampled, value)
+    assert trace == TraceContext(
+        trace_id=TRACE_ID,
+        parent_id=PARENT_ID,
+        flags=flags,
+        sampled=sampled,
+        traceparent=value,
+    )
 
 
 @pytest.mark.parametrize(

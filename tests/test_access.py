@@ -232,13 +232,13 @@ def test_access_config_resolves_latest_preserves_pin_and_validates_new_options()
             AccessLogConfig(**kwargs)
     with pytest.raises(TypeError, match="clock must be callable"):
         AccessLogConfig(clock=invalid)
-    with pytest.raises(ValueError, match="message must be exactly"):
-        AccessLogConfig(message="http request finished")
+    with pytest.raises(TypeError, match="unexpected keyword argument 'message'"):
+        AccessLogConfig(message="request completed")  # ty: ignore[unknown-argument]
     with pytest.raises(ValueError, match="unsupported trace context level"):
         AccessLogConfig(trace_context_level=3)
 
 
-def test_access_config_preserves_the_published_positional_layout():
+def test_access_config_rejects_the_removed_v1_positional_layout():
     logger = logging.getLogger("positional-access-config")
 
     def clock():
@@ -250,18 +250,27 @@ def test_access_config_preserves_the_published_positional_layout():
     def extra_fields(_scope):
         return {"tenant": "one"}
 
+    with pytest.raises(TypeError, match="takes 1 positional argument"):
+        AccessLogConfig(
+            logger,  # ty: ignore[too-many-positional-arguments]
+            LoggingPreset.DEFAULT,
+            clock,
+            status_level,
+            extra_fields,
+        )
+
     config = AccessLogConfig(
+        logger=logger,
+        clock=clock,
+        status_level=status_level,
+        extra_fields=extra_fields,
+    )
+    assert (config.logger, config.clock, config.status_level, config.extra_fields) == (
         logger,
-        LoggingPreset.DEFAULT,
         clock,
         status_level,
         extra_fields,
-        "request completed",
     )
-    assert config.logger is logger
-    assert config.clock is clock
-    assert config.status_level is status_level
-    assert config.extra_fields is extra_fields
 
 
 @pytest.mark.parametrize(
@@ -832,7 +841,9 @@ async def test_deferred_access_record_cannot_be_overwritten_by_another_request_c
 
     other_trace = parse_traceparent("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-00")
     assert other_trace is not None
-    token = _bind_context(RequestContext("other", other_trace.trace_id, other_trace))
+    token = _bind_context(
+        RequestContext(request_id="other", correlation_id=other_trace.trace_id, trace_context=other_trace)
+    )
     try:
         entry = json.loads(JSONFormatter().format(handler.records[0]))
     finally:

@@ -20,7 +20,7 @@ Header = tuple[bytes, bytes]
 _MAX_REQUEST_ID_LENGTH = 128
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class RequestContext:
     """Validated correlation metadata for the current HTTP request."""
 
