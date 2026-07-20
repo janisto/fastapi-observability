@@ -7,13 +7,39 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+The changes in this section target `2.0.0` and must not be published on the
+`1.x` release line. Existing positional `AccessLogConfig` and
+`RequestContextConfig` arguments remain source-compatible; new settings are
+keyword-only.
+
+### Migration from 1.x
+
+- Enable `capture_path`, `capture_peer_ip`, `capture_user_agent`, and
+  `capture_error` explicitly where those privacy-sensitive fields are still
+  required. The new defaults omit them.
+- Rename consumers of `remote_ip` to `peer_ip`. The new value is the direct ASGI
+  peer only; GCP `requestUrl` contains at most the query-free path and never an
+  authority.
+- Remove custom access-record messages and use the fixed
+  `"request completed"` message. Move application-specific text to application
+  log events.
+- Restrict access status callbacks to the supported five-level vocabulary and
+  update abnormal-record queries to use authoritative response status,
+  standardized terminal reasons, and `ERROR` severity.
+- Treat custom request-ID validators as caller-input narrowing only. Generated
+  IDs always retain the package baseline grammar, including after callback
+  failure.
+- Update route dimensions to canonical `{name}` and `{*name}` templates and
+  configure one identical `trace_context_level` on both middleware components;
+  mismatches now fail deterministically.
+
 ### Added
 
 - Added specification-defined GCP profile `0.1.0`, newest-installed resolution,
   exact pinning through `GcpProfileVersion`, and resolved-version introspection
   on both formatter and access configuration.
 - Added independent `capture_path`, `capture_peer_ip`, and
-  `capture_user_agent` opt-ins.
+  `capture_user_agent`, and `capture_error` opt-ins.
 - Added explicit W3C Trace Context Level 2 configuration, including its
   `tracestate` key grammar and `trace_id_random` projection. Level 1 remains the
   default.
@@ -43,6 +69,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Enforced the `traceparent` input ceiling in UTF-8 bytes and omitted malformed
   percent-escaped raw paths instead of emitting them.
+- Ignored non-encodable Python strings instead of allowing malformed
+  `traceparent` input to raise `UnicodeEncodeError`.
+- Preserved sampling while omitting the Level 2 random flag for unknown future
+  `traceparent` versions.
+- Preserved the published positional constructor layouts and rejected
+  mismatched composed trace-level configuration.
 
 ## [1.0.1] - 2026-07-17
 

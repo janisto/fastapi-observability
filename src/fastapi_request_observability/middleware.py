@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, MutableMapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ._context import (
@@ -37,10 +37,10 @@ class RequestContextConfig:
     response_header: str | None = None
     traceparent_header: str = "traceparent"
     tracestate_header: str = "tracestate"
-    trace_context_level: TraceContextLevel | int = TraceContextLevel.LEVEL_1
     request_id_generator: RequestIDGenerator = _default_request_id
     request_id_validator: RequestIDValidator = _default_validate_request_id
     inject_response_header: bool = True
+    trace_context_level: TraceContextLevel | int = field(default=TraceContextLevel.LEVEL_1, kw_only=True)
 
     def __post_init__(self) -> None:
         """Validate headers and callbacks eagerly."""

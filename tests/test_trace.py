@@ -77,6 +77,21 @@ def test_future_version_accepts_base_and_opaque_dash_delimited_extension():
     assert parse_traceparent(f"{base}future") is None
 
 
+@pytest.mark.parametrize(("flags", "sampled"), [("02", False), ("03", True)])
+def test_future_version_level_2_preserves_sampling_without_assigning_random(flags, sampled):
+    value = f"01-{TRACE_ID}-{PARENT_ID}-{flags}-opaque"
+    trace = parse_traceparent(value, TraceContextLevel.LEVEL_2)
+    assert trace is not None
+    assert trace.sampled is sampled
+    assert trace.trace_id_random is None
+    assert trace.trace_context_level is TraceContextLevel.LEVEL_2
+
+
+def test_non_encodable_traceparent_is_ignored():
+    value = f"01-{TRACE_ID}-{PARENT_ID}-01-\ud800"
+    assert parse_traceparent(value, TraceContextLevel.LEVEL_2) is None
+
+
 def test_future_version_accepts_512_ascii_byte_limit_and_rejects_513():
     base = f"01-{TRACE_ID}-{PARENT_ID}-01"
     assert parse_traceparent(f"{base}-{'x' * 456}") is not None

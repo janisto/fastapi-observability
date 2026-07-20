@@ -30,6 +30,29 @@ def test_request_context_config_resolves_trace_level_and_rejects_unsupported_val
         RequestContextConfig(trace_context_level=3)
 
 
+def test_request_context_config_preserves_the_published_positional_layout():
+    def generator():
+        return "generated"
+
+    def validator(value):
+        return value == "allowed"
+
+    config = RequestContextConfig(
+        "X-Correlation-ID",
+        "X-Response-ID",
+        "x-traceparent",
+        "x-tracestate",
+        generator,
+        validator,
+        False,  # noqa: FBT003 - regression coverage for the published positional API
+    )
+    assert config.request_id_header == "X-Correlation-ID"
+    assert config.response_header == "X-Response-ID"
+    assert config.request_id_generator is generator
+    assert config.request_id_validator is validator
+    assert config.inject_response_header is False
+
+
 async def test_fastapi_request_context_state_header_and_accessors():
     app = FastAPI()
     app.add_middleware(RequestContextMiddleware)

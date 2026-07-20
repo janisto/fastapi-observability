@@ -238,6 +238,59 @@ def test_access_config_resolves_latest_preserves_pin_and_validates_new_options()
         AccessLogConfig(trace_context_level=3)
 
 
+def test_access_config_preserves_the_published_positional_layout():
+    logger = logging.getLogger("positional-access-config")
+
+    def clock():
+        return 1.0
+
+    def status_level(_status):
+        return logging.INFO
+
+    def extra_fields(_scope):
+        return {"tenant": "one"}
+
+    config = AccessLogConfig(
+        logger,
+        LoggingPreset.DEFAULT,
+        clock,
+        status_level,
+        extra_fields,
+        "request completed",
+    )
+    assert config.logger is logger
+    assert config.clock is clock
+    assert config.status_level is status_level
+    assert config.extra_fields is extra_fields
+
+
+@pytest.mark.parametrize(
+    ("request_level", "access_level"),
+    [
+        (TraceContextLevel.LEVEL_1, TraceContextLevel.LEVEL_2),
+        (TraceContextLevel.LEVEL_2, TraceContextLevel.LEVEL_1),
+    ],
+)
+async def test_composed_middleware_rejects_trace_level_mismatch(request_level, access_level):
+    app = FastAPI()
+    app.add_middleware(
+        AccessLogMiddleware,
+        config=AccessLogConfig(trace_context_level=access_level),
+    )
+    app.add_middleware(
+        RequestContextMiddleware,
+        config=RequestContextConfig(trace_context_level=request_level),
+    )
+
+    @app.get("/")
+    async def root():
+        return {"ok": True}
+
+    with pytest.raises(RuntimeError, match="trace_context_level mismatch"):
+        async with asgi_client(app) as client:
+            await client.get("/", headers={"traceparent": TRACEPARENT})
+
+
 def _background_failure():
     raise RuntimeError("background failed")
 

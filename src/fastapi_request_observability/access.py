@@ -69,16 +69,16 @@ class AccessLogConfig:
 
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("fastapi_request_observability.access"))
     preset: LoggingPreset = LoggingPreset.DEFAULT
-    gcp_profile_version: GcpProfileVersion | str | None = None
-    trace_context_level: TraceContextLevel | int = TraceContextLevel.LEVEL_1
-    capture_path: bool = False
-    capture_peer_ip: bool = False
-    capture_user_agent: bool = False
-    capture_error: bool = False
     clock: Clock = time.perf_counter
     status_level: StatusLevel | None = None
     extra_fields: ExtraFields | None = None
     message: str = "request completed"
+    gcp_profile_version: GcpProfileVersion | str | None = field(default=None, kw_only=True)
+    trace_context_level: TraceContextLevel | int = field(default=TraceContextLevel.LEVEL_1, kw_only=True)
+    capture_path: bool = field(default=False, kw_only=True)
+    capture_peer_ip: bool = field(default=False, kw_only=True)
+    capture_user_agent: bool = field(default=False, kw_only=True)
+    capture_error: bool = field(default=False, kw_only=True)
 
     def __post_init__(self) -> None:
         """Validate and freeze effective profile and privacy settings."""
@@ -124,6 +124,8 @@ class AccessLogMiddleware:
             )
             context = _context_from_scope(scope, request_config)
             scope[_SCOPE_CONTEXT_KEY] = context
+        elif context.trace_context_level is not self.config.trace_context_level:
+            raise RuntimeError("trace_context_level mismatch between RequestContextMiddleware and AccessLogMiddleware")
 
         token = None
         if current_request_context() is not context:

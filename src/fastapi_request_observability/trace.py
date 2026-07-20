@@ -63,7 +63,11 @@ def parse_traceparent(
 ) -> TraceContext | None:
     """Parse a W3C traceparent without creating any tracing state."""
     resolved_level = resolve_trace_context_level(trace_context_level)
-    if len(value) < _BASE_TRACEPARENT_LENGTH or len(value.encode("utf-8")) > _MAX_TRACEPARENT_LENGTH:
+    try:
+        encoded_length = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None
+    if len(value) < _BASE_TRACEPARENT_LENGTH or encoded_length > _MAX_TRACEPARENT_LENGTH:
         return None
     if value[2] != "-" or value[35] != "-" or value[52] != "-":
         return None
@@ -91,7 +95,9 @@ def parse_traceparent(
         sampled=bool(int(flags, 16) & 0x01),
         traceparent=value,
         trace_context_level=resolved_level,
-        trace_id_random=bool(int(flags, 16) & 0x02) if resolved_level is TraceContextLevel.LEVEL_2 else None,
+        trace_id_random=(
+            bool(int(flags, 16) & 0x02) if resolved_level is TraceContextLevel.LEVEL_2 and version == "00" else None
+        ),
     )
 
 

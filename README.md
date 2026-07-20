@@ -148,7 +148,8 @@ the limit. An invalid `tracestate` does not invalidate an otherwise valid
 otherwise the request ID is.
 
 Level 2 is an explicit opt-in. Configure the same immutable level on both
-middleware components when both are installed:
+middleware components when both are installed; a mismatch fails the request
+deterministically instead of silently changing the emitted access fields:
 
 ```python
 from fastapi_request_observability import (
@@ -163,8 +164,9 @@ request_context_config = RequestContextConfig(trace_context_level=trace_level)
 ```
 
 Values other than `1` or `2` fail configuration immediately. Both levels
-preserve `trace_flags` and derive `trace_sampled` from bit zero. Level 2 also
-emits `trace_id_random` from bit one; Level 1 deliberately omits that field.
+preserve `trace_flags` and derive `trace_sampled` from bit zero. For version
+`00`, Level 2 also emits `trace_id_random` from bit one. Level 1 and unknown
+higher versions deliberately omit that field.
 
 The incoming parent ID is not a span created by this application. No preset
 emits it as a current span ID.
@@ -338,6 +340,11 @@ fields, and supported runtime versions are compatibility contracts. Breaking
 changes require a new major version, explicit changelog coverage, and migration
 guidance. The package does not configure logging at import time and does not
 claim ownership of exception responses.
+
+The current Unreleased contract changes are reserved for `2.0.0`; see the
+changelog migration section before upgrading a 1.x application. Existing
+positional configuration arguments retain their 1.x order, while new settings
+are keyword-only.
 
 Repository tests use HTTPX2 directly with its asynchronous ASGI transport.
 Deprecated HTTPX and FastAPI/Starlette `TestClient` are intentionally excluded.

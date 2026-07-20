@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from itertools import count
 from threading import Lock
 
-from .trace import TraceContext, TraceContextLevel, _with_tracestate, parse_traceparent
+from .trace import TraceContext, TraceContextLevel, _with_tracestate, parse_traceparent, resolve_trace_context_level
 
 RequestIDGenerator = Callable[[], str]
 RequestIDValidator = Callable[[str], bool]
@@ -27,6 +27,7 @@ class RequestContext:
     request_id: str
     correlation_id: str
     trace_context: TraceContext | None = None
+    trace_context_level: TraceContextLevel = TraceContextLevel.LEVEL_1
 
 
 _request_context: ContextVar[RequestContext | None] = ContextVar(
@@ -126,6 +127,7 @@ def _build_context(  # noqa: PLR0913 - explicit extraction inputs keep framework
     validator: RequestIDValidator,
     trace_context_level: TraceContextLevel | int = TraceContextLevel.LEVEL_1,
 ) -> RequestContext:
+    resolved_trace_context_level = resolve_trace_context_level(trace_context_level)
     request_id_values = _header_values(headers, request_id_header)
     incoming_request_id = request_id_values[0] if len(request_id_values) == 1 else ""
     selected_request_id = (
@@ -133,7 +135,9 @@ def _build_context(  # noqa: PLR0913 - explicit extraction inputs keep framework
     )
 
     traceparent_values = _header_values(headers, traceparent_header)
-    trace = parse_traceparent(traceparent_values[0], trace_context_level) if len(traceparent_values) == 1 else None
+    trace = (
+        parse_traceparent(traceparent_values[0], resolved_trace_context_level) if len(traceparent_values) == 1 else None
+    )
     if trace is not None:
         trace = _with_tracestate(trace, _header_values(headers, tracestate_header))
 
@@ -141,4 +145,5 @@ def _build_context(  # noqa: PLR0913 - explicit extraction inputs keep framework
         request_id=selected_request_id,
         correlation_id=trace.trace_id if trace else selected_request_id,
         trace_context=trace,
+        trace_context_level=resolved_trace_context_level,
     )
