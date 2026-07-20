@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 
@@ -20,6 +21,35 @@ PROVIDER_FIELDS = {
 
 class UnsupportedValue:
     pass
+
+
+def test_standard_stream_handler_writes_each_event_as_one_lf_terminated_ndjson_object():
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(JSONFormatter())
+    logger = logging.getLogger("test.ndjson")
+    previous_handlers = list(logger.handlers)
+    previous_level = logger.level
+    previous_propagate = logger.propagate
+    try:
+        logger.handlers[:] = [handler]
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        logger.info("first\nlogical message")
+        logger.error("second message")
+    finally:
+        logger.handlers[:] = previous_handlers
+        logger.setLevel(previous_level)
+        logger.propagate = previous_propagate
+
+    raw = output.getvalue()
+    assert raw.endswith("\n")
+    assert "\r" not in raw
+    lines = raw.removesuffix("\n").split("\n")
+    assert len(lines) == 2
+    records = [json.loads(line) for line in lines]
+    assert all(isinstance(record, dict) for record in records)
+    assert [record["message"] for record in records] == ["first\nlogical message", "second message"]
 
 
 def _unique_object(pairs):

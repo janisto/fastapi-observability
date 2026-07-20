@@ -32,6 +32,33 @@ coupling application code to a cloud logging SDK. The package focuses on
 structured logging and request correlation: it does not create spans, configure
 OpenTelemetry, or ship logs to a backend.
 
+## Why newline-delimited JSON
+
+`JSONFormatter` creates one compact, self-contained JSON object per application
+or access event. A standard-library `logging.StreamHandler` follows it with one
+LF (`\n`), producing newline-delimited JSON (NDJSON, also called JSON Lines).
+Custom handlers must preserve that one-object-per-line framing by appending
+exactly one LF and no non-JSON text. The output is a stream of objects, never a
+JSON array.
+
+NDJSON is deliberate for production logging:
+
+- Agents such as Vector, Fluent Bit, and Datadog can parse entries as a stream
+  with bounded memory instead of waiting for a closing array bracket.
+- Append-only output needs no array brackets, commas, whole-file rewrites, or
+  trailing-comma coordination. Each handler emission submits one complete
+  encoded line; the destination and record size determine OS-level write
+  atomicity.
+- A crash or interrupted final write can damage the incomplete last line, while
+  previously completed lines remain independently parseable.
+- Analytics systems can split large inputs on newline boundaries and process
+  independent records in parallel.
+- Standard tools work directly on the stream, for example
+  `head -n 20 app.log | jq -r '.message'`.
+
+Standard JSON arrays are suited to complete documents; NDJSON retains JSON's
+structured fields while providing framing designed for continuous log streams.
+
 ## Package scope
 
 It uses standard-library `logging` and pure ASGI middleware, with no exporter or

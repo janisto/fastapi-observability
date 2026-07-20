@@ -52,6 +52,8 @@ constructor layouts or compatibility-only options.
   surface has one explicit configuration form.
 - Set distribution and lock metadata to `2.0.0` so package validation cannot
   produce a breaking artifact mislabeled for the v1 release line.
+- Documented LF-terminated NDJSON at the standard stream-handler boundary and
+  added raw-output regression coverage for independently parseable records.
 
 - Fold every GCP logger level into the five profile severities, reject
   nonstandard access status levels, and canonicalize or omit direct peer IPs.

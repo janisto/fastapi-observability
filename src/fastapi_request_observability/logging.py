@@ -97,7 +97,7 @@ _RESERVED_FIELDS = frozenset(
 
 
 class JSONFormatter(logging.Formatter):
-    """Format compact JSON and inject the current request context."""
+    """Format one compact JSON object; a stream handler supplies the NDJSON LF."""
 
     def __init__(
         self,
@@ -114,7 +114,7 @@ class JSONFormatter(logging.Formatter):
 
     @override
     def format(self, record: logging.LogRecord) -> str:
-        """Return one compact, valid JSON object."""
+        """Return one compact JSON object without a line terminator."""
         level_field = "severity" if self.preset is LoggingPreset.GCP else "level"
         level = _gcp_severity(record.levelno) if self.preset is LoggingPreset.GCP else record.levelname
         data: dict[str, Any] = {
