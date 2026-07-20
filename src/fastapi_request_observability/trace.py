@@ -6,8 +6,6 @@ from dataclasses import dataclass, replace
 from enum import IntEnum
 
 _BASE_TRACEPARENT_LENGTH = 55
-_MAX_TRACEPARENT_LENGTH = 512
-_MAX_TRACESTATE_LENGTH = 512
 _MAX_TRACESTATE_MEMBERS = 32
 _MAX_TRACESTATE_KEY_LENGTH = 256
 _MAX_TRACESTATE_TENANT_ID_LENGTH = 241
@@ -23,6 +21,11 @@ _TRACESTATE_VALUE_SECOND_RANGE_START = 0x2D
 _TRACESTATE_VALUE_SECOND_RANGE_END = 0x3C
 _TRACESTATE_VALUE_THIRD_RANGE_START = 0x3E
 _TRACESTATE_VALUE_THIRD_RANGE_END = 0x7E
+_HTTP_FIELD_TAB = ord("\t")
+_HTTP_FIELD_SPACE = ord(" ")
+_HTTP_FIELD_VISIBLE_END = ord("~")
+_HTTP_FIELD_OBS_TEXT_START = 0x80
+_HTTP_FIELD_OBS_TEXT_END = 0xFF
 
 
 class TraceContextLevel(IntEnum):
@@ -64,15 +67,11 @@ def parse_traceparent(
 ) -> TraceContext | None:
     """Parse a W3C traceparent without creating any tracing state."""
     resolved_level = resolve_trace_context_level(trace_context_level)
-    try:
-        encoded_length = len(value.encode("utf-8"))
-    except UnicodeEncodeError:
-        return None
-    if (
-        len(value) < _BASE_TRACEPARENT_LENGTH
-        or encoded_length > _MAX_TRACEPARENT_LENGTH
-        or not value.isascii()
-        or any(ord(character) < _ASCII_SPACE or ord(character) == _ASCII_DELETE for character in value)
+    if len(value) < _BASE_TRACEPARENT_LENGTH or any(
+        ord(character) != _HTTP_FIELD_TAB
+        and not _HTTP_FIELD_SPACE <= ord(character) <= _HTTP_FIELD_VISIBLE_END
+        and not _HTTP_FIELD_OBS_TEXT_START <= ord(character) <= _HTTP_FIELD_OBS_TEXT_END
+        for character in value
     ):
         return None
     if value[2] != "-" or value[35] != "-" or value[52] != "-":
@@ -111,7 +110,7 @@ def _with_tracestate(trace: TraceContext, values: list[str]) -> TraceContext:
     if not values:
         return trace
     tracestate = ",".join(values)
-    if not tracestate.isascii() or len(tracestate) > _MAX_TRACESTATE_LENGTH:
+    if not tracestate.isascii():
         return trace
     valid, canonical = _parse_tracestate(tracestate, trace.trace_context_level)
     return replace(trace, tracestate=canonical) if valid else trace

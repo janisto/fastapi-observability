@@ -18,6 +18,8 @@ RequestIDGenerator = Callable[[], str]
 RequestIDValidator = Callable[[str], bool]
 Header = tuple[bytes, bytes]
 _MAX_REQUEST_ID_LENGTH = 128
+_VISIBLE_ASCII_START = ord("!")
+_VISIBLE_ASCII_END = ord("~")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -97,7 +99,11 @@ def _new_valid_request_id(generator: RequestIDGenerator) -> str:
 
 
 def _is_valid(validator: RequestIDValidator, value: str) -> bool:
-    if not _default_validate_request_id(value):
+    if (
+        not value
+        or not value.isascii()
+        or any(not _VISIBLE_ASCII_START <= ord(character) <= _VISIBLE_ASCII_END for character in value)
+    ):
         return False
     try:
         return validator(value)

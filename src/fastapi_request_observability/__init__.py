@@ -8,13 +8,15 @@ from ._context import (
     trace_context,
 )
 from .access import AccessLogConfig, AccessLogMiddleware
-from .logging import GcpProfileVersion, JSONFormatter, LoggingPreset
+from .logging import AwsProfileVersion, AzureProfileVersion, GcpProfileVersion, JSONFormatter, LoggingPreset
 from .middleware import RequestContextConfig, RequestContextMiddleware
 from .trace import TraceContext, TraceContextLevel, parse_traceparent, resolve_trace_context_level
 
 __all__ = [
     "AccessLogConfig",
     "AccessLogMiddleware",
+    "AwsProfileVersion",
+    "AzureProfileVersion",
     "GcpProfileVersion",
     "JSONFormatter",
     "LoggingPreset",

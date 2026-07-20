@@ -153,9 +153,12 @@ bits of randomness. The selected value is available from:
 
 The response header, input headers, generator, and validator are configurable
 with `RequestContextConfig`. Generated values are validated too, and an invalid
-custom generator falls back to the package's safe format. Custom validators
-can only narrow the same URI-unreserved baseline; they cannot admit punctuation
-such as `!` or `:`, whitespace, non-ASCII, empty, or oversized values.
+custom generator falls back to the package's safe format. Without a custom
+validator, caller IDs use the same URI-unreserved baseline. A custom validator
+may admit any nonempty visible-ASCII caller value, including punctuation such
+as `!` or `:` and values longer than 128 characters; controls, whitespace, DEL,
+and non-ASCII remain outside this ASGI adapter's response-header boundary.
+Generated and fallback IDs always retain the package baseline.
 Accessors return `None` outside a request; no background-job context is
 manufactured.
 Invalid or empty configured HTTP header names fail immediately when the config
@@ -163,16 +166,18 @@ object is constructed; use `inject_response_header=False` to disable response
 header injection.
 
 `traceparent` parsing defaults to the pinned W3C Trace Context Level 1
-Recommendation. Invalid, duplicate, uppercase, zero-ID, or oversized values
-are ignored. Version `00` must be exactly 55 characters; future versions follow
-W3C extension framing and treat every dash-delimited suffix as opaque.
+Recommendation. Invalid, duplicate, uppercase, zero-ID, or unsafe native field
+values are ignored. Version `00` must be exactly 55 characters; future versions
+follow W3C extension framing, treat every dash-delimited suffix as opaque, and
+have no package-invented length ceiling.
 `tracestate` field-lines are combined in wire order,
 canonicalized by removing HTTP optional whitespace around members, and retained
-only when their selected-level key/value grammar, unique-key rule, 32-member
-limit, and 512-byte limit are valid. Empty members are valid and count toward
-the limit. An invalid `tracestate` does not invalidate an otherwise valid
-`traceparent`. When the trace is valid, its trace ID is the correlation ID;
-otherwise the request ID is.
+only when their selected-level key/value grammar, unique-key rule, and
+32-member limit are valid. The package can propagate at least 512 characters
+and admits valid values beyond that minimum, including the 513-character
+boundary. Empty members are valid and count toward the member limit. An invalid
+`tracestate` does not invalidate an otherwise valid `traceparent`. When the
+trace is valid, its trace ID is the correlation ID; otherwise the request ID is.
 
 Level 2 is an explicit opt-in. Configure the same immutable level on both
 middleware components when both are installed; a mismatch fails the request
@@ -264,6 +269,8 @@ Pass the same preset to the formatter and access configuration:
 ```python
 from fastapi_request_observability import (
     AccessLogConfig,
+    AwsProfileVersion,
+    AzureProfileVersion,
     GcpProfileVersion,
     JSONFormatter,
     LoggingPreset,
@@ -291,9 +298,15 @@ access_config = AccessLogConfig(
   `JSONFormatter.gcp_profile_version` and
   `AccessLogConfig.gcp_profile_version`.
 - `AWS` adds `xray_trace_id` in `1-8hex-24hex` form. It does not create an X-Ray
-  segment.
+  segment. Omission resolves to exact current profile `0.1.0`; pin with
+  `AwsProfileVersion.V0_1_0`. The effective enum remains inspectable as
+  `aws_profile_version` on both formatter and access configuration, and other
+  pins fail initialization.
 - `AZURE` adds `operation_Id` and `operation_ParentId`. It does not start or
-  export Application Insights telemetry.
+  export Application Insights telemetry. Omission resolves to exact current
+  profile `0.1.0`; pin with `AzureProfileVersion.V0_1_0`. The effective enum
+  remains inspectable as `azure_profile_version` on both formatter and access
+  configuration, and other pins fail initialization.
 
 Provider fields correlate logs only. Trace creation and export remain the
 application's responsibility.
@@ -308,6 +321,9 @@ exception unchanged. It never synthesizes a replacement 500 response.
   terminal reason `service_error`; no synthetic 500 is logged.
 - Once response headers are sent, that committed status wins even if streaming
   later fails; the record uses terminal reason `body_error` and level `ERROR`.
+- An `OSError` raised specifically by the downstream ASGI `send` boundary uses
+  `client_disconnect` and preserves the original exception. An application or
+  body-generator `OSError` remains a service or body failure.
 - Cancellation uses terminal reason `cancelled`. An application that returns
   without a complete response uses `response_dropped` after response start or
   `unknown_failure` before it.
@@ -417,3 +433,37 @@ This intentionally runs outside `just qa`. Use `uv run mutmut results` to
 list surviving mutants and `uv run mutmut show <mutant>` to inspect one. Add a
 test when a survivor exposes a contract gap; equivalent transformations do not
 need production pragmas or artificial assertions.
+
+## References
+
+- [FastAPI middleware](https://fastapi.tiangolo.com/tutorial/middleware/)
+  documents middleware stacking and request/response execution order.
+- [FastAPI advanced middleware](https://fastapi.tiangolo.com/advanced/middleware/)
+  documents pure ASGI middleware and wrapping a completed application.
+- [Starlette middleware](https://www.starlette.io/middleware/) documents the
+  default error-middleware stack and pure ASGI middleware conventions.
+- [ASGI HTTP and WebSocket specification](https://asgi.readthedocs.io/en/latest/specs/www.html)
+  defines HTTP scopes, response-start/body events, disconnects, and send
+  failures used by the middleware boundary.
+- [Python `contextvars`](https://docs.python.org/3/library/contextvars.html)
+  defines task-local context propagation and token-based restoration.
+- [W3C Trace Context Level 1 Recommendation](https://www.w3.org/TR/2021/REC-trace-context-1-20211123/)
+  defines the default `traceparent` and `tracestate` contract.
+- [W3C Trace Context Level 2 Candidate Recommendation Draft](https://www.w3.org/TR/2024/CRD-trace-context-2-20240328/)
+  defines the explicit Level 2 key grammar and random trace-ID flag.
+- [Google Cloud trace and log integration](https://cloud.google.com/trace/docs/trace-log-integration)
+  documents the bare trace ID as the preferred trace field format.
+- [Google Cloud Trace release notes](https://cloud.google.com/trace/docs/release-notes)
+  record when the bare trace ID became the preferred form while the full
+  project resource name remained supported.
+- [Google Cloud structured logging](https://cloud.google.com/logging/docs/structured-logging)
+  documents `severity`, `message`, `httpRequest`, and special trace fields.
+- [AWS X-Ray trace IDs](https://docs.aws.amazon.com/xray/latest/devguide/xray-api-sendingdata.html#xray-api-traceids)
+  document converting a W3C trace ID to `1-8hex-24hex` form.
+- [Azure Application Insights data model](https://learn.microsoft.com/en-us/azure/azure-monitor/app/data-model-complete)
+  defines `operation_Id` as the root-operation identifier and
+  `operation_ParentId` as the immediate-parent identifier.
+
+## License
+
+[MIT](LICENSE)

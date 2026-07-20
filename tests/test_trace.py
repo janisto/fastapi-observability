@@ -98,16 +98,22 @@ def test_non_encodable_traceparent_is_ignored():
     assert parse_traceparent(value, TraceContextLevel.LEVEL_2) is None
 
 
-def test_future_version_accepts_512_ascii_byte_limit_and_rejects_513():
+def test_future_version_accepts_beyond_the_former_512_byte_boundary():
     base = f"01-{TRACE_ID}-{PARENT_ID}-01"
     assert parse_traceparent(f"{base}-{'x' * 456}") is not None
-    assert parse_traceparent(f"{base}-{'x' * 457}") is None
+    assert parse_traceparent(f"{base}-{'x' * 457}") is not None
 
 
-@pytest.mark.parametrize("extension", ["opaque-ümlaut", "opaque\x1f", "opaque\x7f"])
-def test_traceparent_rejects_non_ascii_and_control_characters(extension):
+@pytest.mark.parametrize("extension", ["opaque\x1f", "opaque\x7f", "opaque-€"])
+def test_traceparent_rejects_only_values_outside_the_native_http_boundary(extension):
     base = f"01-{TRACE_ID}-{PARENT_ID}-01"
     assert parse_traceparent(f"{base}-{extension}") is None
+
+
+@pytest.mark.parametrize("obs_text", ["\x80", "\xff", "ümlaut"])
+def test_traceparent_accepts_opaque_obs_text_future_data(obs_text):
+    base = f"01-{TRACE_ID}-{PARENT_ID}-01"
+    assert parse_traceparent(f"{base}-opaque-{obs_text}") is not None
 
 
 @pytest.mark.parametrize("separator_index", [2, 35, 52])
@@ -129,7 +135,6 @@ def test_each_required_traceparent_separator_is_validated_independently(separato
         f"00-{TRACE_ID}-{PARENT_ID}-zz",
         f"00-{TRACE_ID}-{PARENT_ID}-01-extra",
         f"00_{TRACE_ID}-{PARENT_ID}-01",
-        f"01-{TRACE_ID}-{PARENT_ID}-01-{'x' * 458}",
     ],
 )
 def test_rejects_invalid_traceparent(value):
@@ -142,13 +147,15 @@ def test_tracestate_combines_multiple_headers_in_wire_order():
     assert _with_tracestate(trace, ["one=1", "two=2"]).tracestate == "one=1,two=2"
 
 
-def test_tracestate_accepts_512_byte_limit_and_rejects_513():
+def test_tracestate_accepts_512_and_513_character_values():
     trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01")
     assert trace is not None
     maximum = f"{'a' * 256}={'b' * 255}"
     assert len(maximum) == 512
     assert _with_tracestate(trace, [maximum]).tracestate == maximum
-    assert _with_tracestate(trace, [f"{'a' * 256}={'b' * 256}"]).tracestate is None
+    over_former_minimum = f"{'a' * 256}={'b' * 256}"
+    assert len(over_former_minimum) == 513
+    assert _with_tracestate(trace, [over_former_minimum]).tracestate == over_former_minimum
 
 
 def test_missing_and_present_empty_tracestate_remain_distinguishable():

@@ -4,7 +4,14 @@ import logging
 
 import pytest
 
-from fastapi_request_observability import GcpProfileVersion, JSONFormatter, LoggingPreset, TraceContextLevel
+from fastapi_request_observability import (
+    AwsProfileVersion,
+    AzureProfileVersion,
+    GcpProfileVersion,
+    JSONFormatter,
+    LoggingPreset,
+    TraceContextLevel,
+)
 from fastapi_request_observability._context import RequestContext, _bind_context, _reset_context
 from fastapi_request_observability.trace import parse_traceparent
 
@@ -87,10 +94,34 @@ def test_gcp_formatter_resolves_latest_preserves_pin_and_rejects_unsupported_ver
     assert latest.gcp_profile_version is GcpProfileVersion.V0_1_0
     assert pinned.gcp_profile_version is GcpProfileVersion.V0_1_0
     assert JSONFormatter().gcp_profile_version is None
-    with pytest.raises(ValueError, match="unsupported GCP profile version"):
-        JSONFormatter(LoggingPreset.GCP, gcp_profile_version="0.2.0")
+    for unsupported in ("", "0.2.0"):
+        with pytest.raises(ValueError, match="unsupported GCP profile version"):
+            JSONFormatter(LoggingPreset.GCP, gcp_profile_version=unsupported)
     with pytest.raises(ValueError, match=r"requires LoggingPreset\.GCP"):
         JSONFormatter(gcp_profile_version=GcpProfileVersion.V0_1_0)
+
+
+def test_aws_profile_resolves_current_exact_version():
+    assert JSONFormatter(LoggingPreset.AWS).aws_profile_version is AwsProfileVersion.V0_1_0
+    assert JSONFormatter(LoggingPreset.AWS, aws_profile_version="0.1.0").aws_profile_version is AwsProfileVersion.V0_1_0
+    for unsupported in ("", "0.2.0"):
+        with pytest.raises(ValueError, match="unsupported AWS profile version"):
+            JSONFormatter(LoggingPreset.AWS, aws_profile_version=unsupported)
+    with pytest.raises(ValueError, match=r"requires LoggingPreset\.AWS"):
+        JSONFormatter(aws_profile_version="0.1.0")
+
+
+def test_azure_profile_resolves_current_exact_version():
+    assert JSONFormatter(LoggingPreset.AZURE).azure_profile_version is AzureProfileVersion.V0_1_0
+    assert (
+        JSONFormatter(LoggingPreset.AZURE, azure_profile_version="0.1.0").azure_profile_version
+        is AzureProfileVersion.V0_1_0
+    )
+    for unsupported in ("", "0.2.0"):
+        with pytest.raises(ValueError, match="unsupported AZURE profile version"):
+            JSONFormatter(LoggingPreset.AZURE, azure_profile_version=unsupported)
+    with pytest.raises(ValueError, match=r"requires LoggingPreset\.AZURE"):
+        JSONFormatter(azure_profile_version="0.1.0")
 
 
 @pytest.mark.parametrize("level", [logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL])

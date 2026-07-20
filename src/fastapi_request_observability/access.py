@@ -21,10 +21,12 @@ from ._context import _bind_context, _reset_context, current_request_context
 from .logging import (
     _ACCESS_FIELDS_KEY,
     _RESERVED_FIELDS,
+    AwsProfileVersion,
+    AzureProfileVersion,
     GcpProfileVersion,
     LoggingPreset,
     _context_fields,
-    _resolve_gcp_profile_version,
+    _resolve_provider_profile_versions,
 )
 from .middleware import (
     _MISSING,
@@ -61,7 +63,7 @@ _SERVER_ERROR_STATUS = 500
 _FIRST_CONTROL_CODEPOINT = 0x20
 _DELETE_CODEPOINT = 0x7F
 _MAX_PROTOBUF_DURATION_MILLISECONDS_EXCLUSIVE = 315_576_000_001_000
-_SAFE_STATUS_LEVELS = frozenset({logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL})
+_NANOSECONDS_PER_SECOND = 1_000_000_000
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -74,6 +76,8 @@ class AccessLogConfig:
     status_level: StatusLevel | None = None
     extra_fields: ExtraFields | None = None
     gcp_profile_version: GcpProfileVersion | str | None = None
+    aws_profile_version: AwsProfileVersion | str | None = None
+    azure_profile_version: AzureProfileVersion | str | None = None
     trace_context_level: TraceContextLevel | int = TraceContextLevel.LEVEL_1
     capture_path: bool = False
     capture_peer_ip: bool = False
@@ -82,11 +86,12 @@ class AccessLogConfig:
 
     def __post_init__(self) -> None:
         """Validate and freeze effective profile and privacy settings."""
-        object.__setattr__(
-            self,
-            "gcp_profile_version",
-            _resolve_gcp_profile_version(self.preset, self.gcp_profile_version),
+        gcp, aws, azure = _resolve_provider_profile_versions(
+            self.preset, self.gcp_profile_version, self.aws_profile_version, self.azure_profile_version
         )
+        object.__setattr__(self, "gcp_profile_version", gcp)
+        object.__setattr__(self, "aws_profile_version", aws)
+        object.__setattr__(self, "azure_profile_version", azure)
         object.__setattr__(
             self,
             "trace_context_level",
@@ -134,6 +139,7 @@ class AccessLogMiddleware:
         status: int | None = None
         emitted = False
         trailers_pending = False
+        downstream_disconnect: OSError | None = None
 
         def emit(
             error: BaseException | None = None,
@@ -166,10 +172,14 @@ class AccessLogMiddleware:
                 _diagnostic("access log emission failed", logging_error)
 
         async def send_with_observation(message: _Message) -> None:
-            nonlocal status, trailers_pending
+            nonlocal status, trailers_pending, downstream_disconnect
             if message["type"] == "http.response.start" and created_context:
                 _set_header(message, "X-Request-ID", context.request_id)
-            await send(message)
+            try:
+                await send(message)
+            except OSError as error:
+                downstream_disconnect = error
+                raise
             if message["type"] == "http.response.start":
                 status = message["status"]
                 trailers_pending = bool(message.get("trailers", False))
@@ -185,12 +195,7 @@ class AccessLogMiddleware:
             if not emitted:
                 emit(terminal_reason="response_dropped" if status is not None else "unknown_failure")
         except BaseException as error:
-            if isinstance(error, CancelledError):
-                terminal_reason: TerminalReason = "cancelled"
-            elif status is None:
-                terminal_reason = "service_error"
-            else:
-                terminal_reason = "body_error"
+            terminal_reason = _terminal_reason(error, status, downstream_disconnect)
             emit(error, terminal_reason)
             raise
         finally:
@@ -215,7 +220,8 @@ def _status_level(
         except Exception as error:  # noqa: BLE001 - application callbacks are untrusted
             _diagnostic("access status-level callback failed", error)
         else:
-            if isinstance(level, int) and not isinstance(level, bool) and level in _SAFE_STATUS_LEVELS:
+            level_name = logging.getLevelName(level) if isinstance(level, int) and not isinstance(level, bool) else None
+            if isinstance(level_name, str) and not level_name.startswith("Level "):
                 return level
             _diagnostic(
                 "access status-level callback failed",
@@ -226,6 +232,18 @@ def _status_level(
     if status >= _CLIENT_ERROR_STATUS:
         return logging.WARNING
     return logging.INFO
+
+
+def _terminal_reason(
+    error: BaseException,
+    status: int | None,
+    downstream_disconnect: OSError | None,
+) -> TerminalReason:
+    if error is downstream_disconnect:
+        return "client_disconnect"
+    if isinstance(error, CancelledError):
+        return "cancelled"
+    return "service_error" if status is None else "body_error"
 
 
 def _start_clock(clock: Clock) -> tuple[Clock, float]:
@@ -243,7 +261,7 @@ def _start_clock(clock: Clock) -> tuple[Clock, float]:
 def _duration_ms(clock: Clock, started: float) -> float:
     try:
         duration = (float(clock()) - started) * 1000
-        if not math.isfinite(duration) or duration <= 0 or duration >= _MAX_PROTOBUF_DURATION_MILLISECONDS_EXCLUSIVE:
+        if not math.isfinite(duration) or duration <= 0:
             return 0
         return int(duration) if duration.is_integer() else duration
     except Exception as error:  # noqa: BLE001 - application callbacks are untrusted
@@ -251,8 +269,7 @@ def _duration_ms(clock: Clock, started: float) -> float:
         return 0
 
 
-_ROUTE_PARAMETER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_ROUTE_PLACEHOLDER = re.compile(r"^\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::(?P<converter>[A-Za-z_][A-Za-z0-9_]*))?\}$")
+_ROUTE_PLACEHOLDER = re.compile(r"\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::(?P<converter>[A-Za-z_][A-Za-z0-9_]*))?\}")
 
 
 def _canonical_route_template(native_template: str) -> str | None:
@@ -261,20 +278,26 @@ def _canonical_route_template(native_template: str) -> str | None:
     canonical: list[str] = []
     segments = native_template[1:].split("/")
     for index, segment in enumerate(segments):
-        placeholder = _ROUTE_PLACEHOLDER.fullmatch(segment)
-        if placeholder is not None:
-            name = placeholder.group("name")
-            if not _ROUTE_PARAMETER.fullmatch(name):
-                return None
-            catch_all = placeholder.group("converter") == "path"
-            if catch_all and index != len(segments) - 1:
-                return None
-            prefix = "*" if catch_all else ""
-            canonical.append(f"{{{prefix}{name}}}")
-            continue
-        if any(token in segment for token in ("{", "}", "*")):
+
+        def replace_placeholder(
+            match: re.Match[str],
+            *,
+            segment_index: int = index,
+            native_segment: str = segment,
+        ) -> str:
+            catch_all = match.group("converter") == "path"
+            if catch_all and (segment_index != len(segments) - 1 or match.span() != (0, len(native_segment))):
+                raise ValueError
+            return f"{{{'*' if catch_all else ''}{match.group('name')}}}"
+
+        try:
+            normalized = _ROUTE_PLACEHOLDER.sub(replace_placeholder, segment)
+        except ValueError:
             return None
-        canonical.append(segment)
+        unmatched = _ROUTE_PLACEHOLDER.sub("", segment)
+        if any(token in unmatched for token in ("{", "}", "*")):
+            return None
+        canonical.append(normalized)
     return f"/{'/'.join(canonical)}"
 
 
@@ -288,7 +311,7 @@ def _route_fields(scope: _Scope) -> dict[str, str]:
                 path_template = _canonical_route_template(route_path)
                 if path_template is not None:
                     fields["path_template"] = path_template
-            if isinstance(route, APIRoute) and _valid_metadata_string(route.operation_id):
+            if isinstance(route, APIRoute) and isinstance(route.operation_id, str) and route.operation_id:
                 fields["operation_id"] = route.operation_id
     except Exception as error:  # noqa: BLE001 - framework metadata must not affect traffic
         _diagnostic("access route metadata failed", error)
@@ -323,10 +346,10 @@ def _access_fields(
         fields["user_agent"] = user_agent
 
     if config.preset is LoggingPreset.GCP:
-        http_request: dict[str, Any] = {
-            "requestMethod": fields["method"],
-            "latency": _protobuf_duration(duration_ms),
-        }
+        http_request: dict[str, Any] = {"requestMethod": fields["method"]}
+        latency = _protobuf_duration(duration_ms)
+        if latency is not None:
+            http_request["latency"] = latency
         if status is not None:
             http_request["status"] = status
         if path is not None:
@@ -365,27 +388,29 @@ def _canonical_peer_ip(value: object) -> str | None:
         return None
 
 
-def _valid_metadata_string(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and bool(value)
-        and not any(
-            ord(character) < _FIRST_CONTROL_CODEPOINT or ord(character) == _DELETE_CODEPOINT for character in value
-        )
-    )
-
-
 def _single_valid_header(scope: _Scope, name: str) -> str | None:
     target = name.encode("latin-1")
     values = [value.decode("latin-1") for key, value in scope.get("headers", []) if key.lower() == target]
-    if len(values) != 1 or not _valid_metadata_string(values[0]):
+    if (
+        len(values) != 1
+        or not values[0]
+        or any(
+            (ord(character) < _FIRST_CONTROL_CODEPOINT and character != "\t") or ord(character) == _DELETE_CODEPOINT
+            for character in values[0]
+        )
+    ):
         return None
     return values[0]
 
 
-def _protobuf_duration(duration_ms: float) -> str:
-    nanoseconds = max(round(duration_ms * 1_000_000), 0)
-    seconds, nanos = divmod(nanoseconds, 1_000_000_000)
+def _protobuf_duration(duration_ms: float) -> str | None:
+    if duration_ms >= _MAX_PROTOBUF_DURATION_MILLISECONDS_EXCLUSIVE:
+        return None
+    seconds = int(duration_ms // 1000)
+    nanos = max(round((duration_ms - seconds * 1000) * 1_000_000), 0)
+    if nanos == _NANOSECONDS_PER_SECOND:
+        seconds += 1
+        nanos = 0
     if nanos == 0:
         return f"{seconds}s"
     return f"{seconds}.{nanos:09d}".rstrip("0") + "s"

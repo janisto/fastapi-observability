@@ -25,10 +25,11 @@ constructor layouts or compatibility-only options.
 - Refactor `AccessLogConfig`, `RequestContextConfig`, `RequestContext`, and
   `TraceContext` construction to keyword arguments; v1 positional call shapes
   are rejected.
-- Restrict access status callbacks to the supported five-level vocabulary and
-  update abnormal-record queries to use authoritative response status,
-  standardized terminal reasons, and `ERROR` severity.
-- Treat custom request-ID validators as caller-input narrowing only. Generated
+- Use Python-registered integer levels for access status callbacks and update
+  abnormal-record queries to use authoritative response status, standardized
+  terminal reasons, and `ERROR` severity.
+- Custom request-ID validators apply only to caller input and may broaden it
+  within the ASGI adapter's visible-ASCII response-header boundary. Generated
   IDs always retain the package baseline grammar, including after callback
   failure.
 - Update route dimensions to canonical `{name}` and `{*name}` templates and
@@ -37,9 +38,9 @@ constructor layouts or compatibility-only options.
 
 ### Added
 
-- Added specification-defined GCP profile `0.1.0`, newest-installed resolution,
-  exact pinning through `GcpProfileVersion`, and resolved-version introspection
-  on both formatter and access configuration.
+- Added exact current `0.1.0` profiles for GCP, AWS, and Azure, typed exact
+  pinning, and resolved-version introspection on formatter and access
+  configuration.
 - Added independent `capture_path`, `capture_peer_ip`, and
   `capture_user_agent`, and `capture_error` opt-ins.
 - Added explicit W3C Trace Context Level 2 configuration, including its
@@ -55,15 +56,17 @@ constructor layouts or compatibility-only options.
 - Documented LF-terminated NDJSON at the standard stream-handler boundary and
   added raw-output regression coverage for independently parseable records.
 
-- Fold every GCP logger level into the five profile severities, reject
-  nonstandard access status levels, and canonicalize or omit direct peer IPs.
+- Fold every GCP logger level into the five profile severities, accept
+  registered native access status levels, and canonicalize or omit direct peer
+  IPs.
 - Disabled concrete path, direct peer IP, and User-Agent capture by default;
   renamed the opt-in portable peer field from `remote_ip` to `peer_ip`, and
   narrowed GCP `requestUrl` to the opt-in query-free path without authority.
 - Aligned the GCP health fixture with service version `1.0.0` and added exact,
   deterministic DEBUG and INFO route tests.
-- Canonicalized retained `tracestate` field-lines and restricted custom
-  request-ID validators to narrowing the package's URI-unreserved baseline.
+- Canonicalized retained `tracestate` field-lines without treating 512
+  characters as a maximum, and let custom request-ID validators broaden caller
+  input within the native response-header boundary.
 - Treated dash-delimited future-version `traceparent` suffixes as opaque while
   retaining strict validation of the common 55-character prefix.
 - Made access status authoritative to accepted ASGI response-start messages,
@@ -76,13 +79,15 @@ constructor layouts or compatibility-only options.
 
 ### Fixed
 
-- Preserve framework-valid route parameter names beyond 64 characters, reject
-  non-ASCII or control-bearing `traceparent` fields, reject trace-level
-  disagreement in either middleware order, and safely fall back to zero when
-  elapsed time exceeds the GCP protobuf Duration range.
+- Preserve composite FastAPI route metadata, HTTP-safe opaque future
+  `traceparent` suffixes without an invented length cap, HTAB User-Agent values,
+  nonempty static operation IDs, and exact downstream-send disconnect
+  classification. Reject trace-level disagreement in either middleware order.
+- Preserve portable duration at the GCP protobuf boundary, format representable
+  latency without precision loss, and omit only an unrepresentable provider
+  projection.
 
-- Enforced the `traceparent` input ceiling in UTF-8 bytes and omitted malformed
-  percent-escaped raw paths instead of emitting them.
+- Omitted malformed percent-escaped raw paths instead of emitting them.
 - Ignored non-encodable Python strings instead of allowing malformed
   `traceparent` input to raise `UnicodeEncodeError`.
 - Preserved sampling while omitting the Level 2 random flag for unknown future

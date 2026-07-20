@@ -12,6 +12,8 @@ from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from fastapi_request_observability import (
     AccessLogConfig,
     AccessLogMiddleware,
+    AwsProfileVersion,
+    AzureProfileVersion,
     GcpProfileVersion,
     JSONFormatter,
     LoggingPreset,
@@ -225,6 +227,12 @@ def test_access_config_resolves_latest_preserves_pin_and_validates_new_options()
         AccessLogConfig(preset=LoggingPreset.GCP, gcp_profile_version="0.2.0")
     with pytest.raises(ValueError, match=r"requires LoggingPreset\.GCP"):
         AccessLogConfig(gcp_profile_version="0.1.0")
+    assert AccessLogConfig(preset=LoggingPreset.AWS).aws_profile_version is AwsProfileVersion.V0_1_0
+    assert AccessLogConfig(preset=LoggingPreset.AZURE).azure_profile_version is AzureProfileVersion.V0_1_0
+    with pytest.raises(ValueError, match="unsupported AWS profile version"):
+        AccessLogConfig(preset=LoggingPreset.AWS, aws_profile_version="0.2.0")
+    with pytest.raises(ValueError, match="unsupported AZURE profile version"):
+        AccessLogConfig(preset=LoggingPreset.AZURE, azure_profile_version="0.2.0")
     invalid: Any = 1
     for name in ("capture_path", "capture_peer_ip", "capture_user_agent", "capture_error"):
         kwargs: Any = {name: invalid}
@@ -359,6 +367,8 @@ async def test_route_query_operation_peer_and_context_fields():
         ("/items/{item_id}", "/items/{item_id}"),
         (f"/items/{{{'a' * 65}}}", f"/items/{{{'a' * 65}}}"),
         ("/items/{item_id:int}", "/items/{item_id}"),
+        ("/reports/report-{year:int}.csv", "/reports/report-{year}.csv"),
+        ("/compare/{left:int}-to-{right:int}", "/compare/{left}-to-{right}"),
         ("/files/{path:path}", "/files/{*path}"),
         ("/files/{path:path}/suffix", None),
         ("/items/{item_id?}", None),
@@ -402,10 +412,20 @@ async def test_representative_route_identity_has_stable_cardinality():
 
     app.add_api_route(f"/long/{{{long_name}}}", long_route, methods=["GET"], operation_id="get_long")
 
+    @app.get("/reports/report-{year:int}.csv", operation_id="get_report")
+    async def report(year: int):
+        return {"year": year}
+
+    @app.get("/compare/{left:int}-to-{right:int}", operation_id="compare_reports")
+    async def compare(left: int, right: int):
+        return {"left": left, "right": right}
+
     async with asgi_client(app) as client:
         assert (await client.get("/items/tenant-a")).status_code == 200
         assert (await client.get("/items/tenant-b")).status_code == 200
         assert (await client.get("/long/value")).status_code == 200
+        assert (await client.get("/reports/report-2026.csv")).status_code == 200
+        assert (await client.get("/compare/2025-to-2026")).status_code == 200
         assert (await client.get("/files/tenant-a/one")).status_code == 200
         assert (await client.get("/files/tenant-b/two")).status_code == 200
 
@@ -413,12 +433,14 @@ async def test_representative_route_identity_has_stable_cardinality():
         ("/items/{item_id}", "get_item"),
         ("/items/{item_id}", "get_item"),
         (f"/long/{{{long_name}}}", "get_long"),
+        ("/reports/report-{year}.csv", "get_report"),
+        ("/compare/{left}-to-{right}", "compare_reports"),
         ("/files/{*path}", "get_file"),
         ("/files/{*path}", "get_file"),
     ]
 
 
-async def test_operation_id_with_control_character_is_omitted():
+async def test_operation_id_with_control_character_is_preserved_as_json_data():
     handler = JSONCaptureHandler()
     app = FastAPI()
     app.add_middleware(AccessLogMiddleware, config=AccessLogConfig(logger=_logger(handler)))
@@ -431,7 +453,7 @@ async def test_operation_id_with_control_character_is_omitted():
     async with asgi_client(app) as client:
         assert (await client.get("/control")).status_code == 200
 
-    assert "operation_id" not in handler.entries[0]
+    assert handler.entries[0]["operation_id"] == "get_control\nforged"
 
 
 async def test_application_and_access_records_share_correlation_fields():
@@ -704,10 +726,44 @@ async def test_final_response_trailer_send_failure_is_logged_with_committed_stat
     assert raised.value is error
     assert len(handler.entries) == 1
     assert handler.entries[0]["status"] == 206
-    assert handler.entries[0]["terminal_reason"] == "body_error"
+    assert handler.entries[0]["terminal_reason"] == "client_disconnect"
     assert handler.entries[0]["level"] == "ERROR"
     assert "error" not in handler.entries[0]
     assert request_id() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure_type", "expected_status"),
+    [("http.response.start", None), ("http.response.body", 202)],
+)
+async def test_downstream_send_oserror_is_a_client_disconnect_at_each_response_boundary(failure_type, expected_status):
+    handler = JSONCaptureHandler()
+    error = BrokenPipeError("peer closed")
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 202, "headers": []})
+        await send({"type": "http.response.body", "body": b"accepted"})
+
+    async def disconnected_send(message):
+        if message["type"] == failure_type:
+            raise error
+
+    scope = {"type": "http", "method": "POST", "path": "/", "headers": [], "state": {}}
+    with pytest.raises(BrokenPipeError, match=r"^peer closed$") as raised:
+        await AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler)))(
+            scope, _empty_receive, disconnected_send
+        )
+
+    assert raised.value is error
+    assert len(handler.entries) == 1
+    assert handler.entries[0]["terminal_reason"] == "client_disconnect"
+    assert handler.entries[0]["level"] == "ERROR"
+    assert "error" not in handler.entries[0]
+    if expected_status is None:
+        assert "status" not in handler.entries[0]
+    else:
+        assert handler.entries[0]["status"] == expected_status
 
 
 async def test_background_failure_does_not_emit_second_record_or_change_completed_record():
@@ -1178,7 +1234,7 @@ def test_duration_serializes_exact_integers_without_losing_fractional_values():
     ("finished_seconds", "expected_ms", "expected_latency"),
     [
         (315_576_000_000, 315_576_000_000_000, "315576000000s"),
-        (315_576_000_001, 0, "0s"),
+        (315_576_000_001, 315_576_000_001_000, None),
     ],
 )
 def test_duration_enforces_gcp_protobuf_range(finished_seconds, expected_ms, expected_latency):
@@ -1203,7 +1259,26 @@ async def test_custom_status_level_receives_resolved_status_and_controls_level()
     assert statuses == [200]
 
 
-@pytest.mark.parametrize("invalid_level", [True, 35])
+async def test_registered_custom_status_level_is_preserved():
+    logging.addLevelName(35, "NOTICE")
+    handler = JSONCaptureHandler()
+    async with asgi_client(_app(handler, status_level=lambda _status: 35)) as client:
+        response = await client.get("/items/1")
+    assert response.status_code == 200
+    assert handler.entries[0]["level"] == "NOTICE"
+
+
+async def test_registered_custom_status_level_is_folded_by_gcp_formatter():
+    logging.addLevelName(35, "NOTICE")
+    handler = JSONCaptureHandler(LoggingPreset.GCP)
+    async with asgi_client(_app(handler, preset=LoggingPreset.GCP, status_level=lambda _status: 35)) as client:
+        response = await client.get("/items/1")
+    assert response.status_code == 200
+    assert handler.entries[0]["severity"] == "WARNING"
+    assert "level" not in handler.entries[0]
+
+
+@pytest.mark.parametrize("invalid_level", [True, 36])
 async def test_invalid_status_level_is_diagnosed_and_uses_default_mapping(invalid_level, capsys):
     handler = JSONCaptureHandler()
     async with asgi_client(_app(handler, status_level=lambda _status: invalid_level)) as client:
@@ -1449,6 +1524,27 @@ async def test_user_agent_requires_one_nonempty_control_free_field_line(values):
     assert "user_agent" not in handler.entries[0]
 
 
+async def test_user_agent_preserves_valid_horizontal_tab_whitespace():
+    handler = JSONCaptureHandler()
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "raw_path": b"/",
+        "headers": [(b"user-agent", b"agent/1\tcomponent/2")],
+        "state": {},
+    }
+    await AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler), capture_user_agent=True))(
+        scope, _empty_receive, _discard
+    )
+    assert handler.entries[0]["user_agent"] == "agent/1\tcomponent/2"
+
+
 @pytest.mark.parametrize(
     ("scope", "expected"),
     [
@@ -1466,7 +1562,13 @@ def test_request_path_uses_only_wire_encoding(scope, expected):
 
 @pytest.mark.parametrize(
     ("duration_ms", "expected"),
-    [(0.0, "0s"), (0.000001, "0.000000001s"), (1000.0, "1s"), (1250.0, "1.25s")],
+    [
+        (0.0, "0s"),
+        (0.000001, "0.000000001s"),
+        (999.9999996, "1s"),
+        (1000.0, "1s"),
+        (1250.0, "1.25s"),
+    ],
 )
 def test_protobuf_duration_serialization_boundaries(duration_ms, expected):
     assert _protobuf_duration(duration_ms) == expected

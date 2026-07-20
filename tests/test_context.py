@@ -208,8 +208,8 @@ def test_invalid_package_fallback_is_replaced_by_last_resort_safe_id(monkeypatch
     _assert_default_generated_request_id(generated)
 
 
-@pytest.mark.parametrize("value", ["", " ", "!", ":", "\x7f", "é"])
-def test_custom_validator_cannot_admit_empty_or_unsafe_header_values(value):
+@pytest.mark.parametrize("value", ["", " ", "\x7f", "é"])
+def test_custom_validator_cannot_admit_values_outside_the_native_header_boundary(value):
     context = _build_context(
         [(b"x-request-id", value.encode("latin-1"))],
         request_id_header="X-Request-ID",
@@ -219,6 +219,19 @@ def test_custom_validator_cannot_admit_empty_or_unsafe_header_values(value):
         validator=lambda _value: True,
     )
     assert context.request_id == "safe-id"
+
+
+@pytest.mark.parametrize("value", ["!", "id:42", "x" * 129])
+def test_custom_validator_can_broaden_visible_ascii_caller_ids(value):
+    context = _build_context(
+        [(b"x-request-id", value.encode("ascii"))],
+        request_id_header="X-Request-ID",
+        traceparent_header="traceparent",
+        tracestate_header="tracestate",
+        generator=lambda: "safe-id",
+        validator=lambda _value: True,
+    )
+    assert context.request_id == value
 
 
 @pytest.mark.parametrize("value", ["A", "~"])
