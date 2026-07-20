@@ -280,16 +280,16 @@ def test_access_config_rejects_the_removed_v1_positional_layout():
         (TraceContextLevel.LEVEL_2, TraceContextLevel.LEVEL_1),
     ],
 )
-async def test_composed_middleware_rejects_trace_level_mismatch(request_level, access_level):
+@pytest.mark.parametrize("request_context_outermost", [False, True])
+async def test_composed_middleware_rejects_trace_level_mismatch_in_either_order(
+    request_level, access_level, request_context_outermost
+):
     app = FastAPI()
-    app.add_middleware(
-        AccessLogMiddleware,
-        config=AccessLogConfig(trace_context_level=access_level),
-    )
-    app.add_middleware(
-        RequestContextMiddleware,
-        config=RequestContextConfig(trace_context_level=request_level),
-    )
+    access = (AccessLogMiddleware, AccessLogConfig(trace_context_level=access_level))
+    request = (RequestContextMiddleware, RequestContextConfig(trace_context_level=request_level))
+    inner, outer = (access, request) if request_context_outermost else (request, access)
+    app.add_middleware(inner[0], config=inner[1])
+    app.add_middleware(outer[0], config=outer[1])
 
     @app.get("/")
     async def root():
@@ -357,6 +357,7 @@ async def test_route_query_operation_peer_and_context_fields():
     [
         ("/health", "/health"),
         ("/items/{item_id}", "/items/{item_id}"),
+        (f"/items/{{{'a' * 65}}}", f"/items/{{{'a' * 65}}}"),
         ("/items/{item_id:int}", "/items/{item_id}"),
         ("/files/{path:path}", "/files/{*path}"),
         ("/files/{path:path}/suffix", None),
@@ -394,15 +395,24 @@ async def test_representative_route_identity_has_stable_cardinality():
     async def files(path: str):
         return {"path": path}
 
+    long_name = "a" * 65
+
+    async def long_route(request: Request):
+        return {"value": request.path_params[long_name]}
+
+    app.add_api_route(f"/long/{{{long_name}}}", long_route, methods=["GET"], operation_id="get_long")
+
     async with asgi_client(app) as client:
         assert (await client.get("/items/tenant-a")).status_code == 200
         assert (await client.get("/items/tenant-b")).status_code == 200
+        assert (await client.get("/long/value")).status_code == 200
         assert (await client.get("/files/tenant-a/one")).status_code == 200
         assert (await client.get("/files/tenant-b/two")).status_code == 200
 
     assert [(entry["path_template"], entry["operation_id"]) for entry in handler.entries] == [
         ("/items/{item_id}", "get_item"),
         ("/items/{item_id}", "get_item"),
+        (f"/long/{{{long_name}}}", "get_long"),
         ("/files/{*path}", "get_file"),
         ("/files/{*path}", "get_file"),
     ]
@@ -1162,6 +1172,19 @@ def test_duration_serializes_exact_integers_without_losing_fractional_values():
     assert type(integral) is int
     assert fractional == 12.5
     assert type(fractional) is float
+
+
+@pytest.mark.parametrize(
+    ("finished_seconds", "expected_ms", "expected_latency"),
+    [
+        (315_576_000_000, 315_576_000_000_000, "315576000000s"),
+        (315_576_000_001, 0, "0s"),
+    ],
+)
+def test_duration_enforces_gcp_protobuf_range(finished_seconds, expected_ms, expected_latency):
+    duration_ms = _duration_ms(lambda: finished_seconds, 0.0)
+    assert duration_ms == expected_ms
+    assert _protobuf_duration(duration_ms) == expected_latency
 
 
 async def test_custom_status_level_receives_resolved_status_and_controls_level():

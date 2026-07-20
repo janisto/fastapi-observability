@@ -80,6 +80,8 @@ class RequestContextMiddleware:
         if created_context:
             context = _context_from_scope(scope, self.config)
             scope[_SCOPE_CONTEXT_KEY] = context
+        elif context.trace_context_level is not self.config.trace_context_level:
+            raise RuntimeError("trace_context_level mismatch between RequestContextMiddleware and AccessLogMiddleware")
 
         token = None
         if current_request_context() is not context:

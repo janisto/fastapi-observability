@@ -76,6 +76,11 @@ constructor layouts or compatibility-only options.
 
 ### Fixed
 
+- Preserve framework-valid route parameter names beyond 64 characters, reject
+  non-ASCII or control-bearing `traceparent` fields, reject trace-level
+  disagreement in either middleware order, and safely fall back to zero when
+  elapsed time exceeds the GCP protobuf Duration range.
+
 - Enforced the `traceparent` input ceiling in UTF-8 bytes and omitted malformed
   percent-escaped raw paths instead of emitting them.
 - Ignored non-encodable Python strings instead of allowing malformed

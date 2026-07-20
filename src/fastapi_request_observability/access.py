@@ -60,6 +60,7 @@ _CLIENT_ERROR_STATUS = 400
 _SERVER_ERROR_STATUS = 500
 _FIRST_CONTROL_CODEPOINT = 0x20
 _DELETE_CODEPOINT = 0x7F
+_MAX_PROTOBUF_DURATION_MILLISECONDS_EXCLUSIVE = 315_576_000_001_000
 _SAFE_STATUS_LEVELS = frozenset({logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL})
 
 
@@ -242,7 +243,7 @@ def _start_clock(clock: Clock) -> tuple[Clock, float]:
 def _duration_ms(clock: Clock, started: float) -> float:
     try:
         duration = (float(clock()) - started) * 1000
-        if not math.isfinite(duration) or duration <= 0:
+        if not math.isfinite(duration) or duration <= 0 or duration >= _MAX_PROTOBUF_DURATION_MILLISECONDS_EXCLUSIVE:
             return 0
         return int(duration) if duration.is_integer() else duration
     except Exception as error:  # noqa: BLE001 - application callbacks are untrusted
@@ -250,10 +251,8 @@ def _duration_ms(clock: Clock, started: float) -> float:
         return 0
 
 
-_ROUTE_PARAMETER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
-_ROUTE_PLACEHOLDER = re.compile(
-    r"^\{(?P<name>[A-Za-z_][A-Za-z0-9_]{0,63})(?::(?P<converter>[A-Za-z_][A-Za-z0-9_]*))?\}$"
-)
+_ROUTE_PARAMETER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ROUTE_PLACEHOLDER = re.compile(r"^\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::(?P<converter>[A-Za-z_][A-Za-z0-9_]*))?\}$")
 
 
 def _canonical_route_template(native_template: str) -> str | None:

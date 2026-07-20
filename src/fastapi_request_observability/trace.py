@@ -16,6 +16,7 @@ _MAX_TRACESTATE_VALUE_LENGTH = 256
 _TRACESTATE_KEY_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-*/")
 _TRACESTATE_LEVEL_2_KEY_CHARACTERS = _TRACESTATE_KEY_CHARACTERS | {"@"}
 _ASCII_SPACE = 0x20
+_ASCII_DELETE = 0x7F
 _TRACESTATE_VALUE_FIRST_RANGE_START = 0x21
 _TRACESTATE_VALUE_FIRST_RANGE_END = 0x2B
 _TRACESTATE_VALUE_SECOND_RANGE_START = 0x2D
@@ -67,7 +68,12 @@ def parse_traceparent(
         encoded_length = len(value.encode("utf-8"))
     except UnicodeEncodeError:
         return None
-    if len(value) < _BASE_TRACEPARENT_LENGTH or encoded_length > _MAX_TRACEPARENT_LENGTH:
+    if (
+        len(value) < _BASE_TRACEPARENT_LENGTH
+        or encoded_length > _MAX_TRACEPARENT_LENGTH
+        or not value.isascii()
+        or any(ord(character) < _ASCII_SPACE or ord(character) == _ASCII_DELETE for character in value)
+    ):
         return None
     if value[2] != "-" or value[35] != "-" or value[52] != "-":
         return None
