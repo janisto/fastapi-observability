@@ -20,12 +20,12 @@ from fastapi.routing import APIRoute
 from ._context import _bind_context, _reset_context, current_request_context
 from .logging import (
     _ACCESS_FIELDS_KEY,
-    _RESERVED_FIELDS,
     AwsProfileVersion,
     AzureProfileVersion,
     GcpProfileVersion,
     LoggingPreset,
     _context_fields,
+    _is_reserved_field,
     _resolve_provider_profile_versions,
 )
 from .middleware import (
@@ -56,7 +56,6 @@ TerminalReason = Literal[
     "response_dropped",
     "timeout",
     "panic",
-    "unknown_failure",
 ]
 _CLIENT_ERROR_STATUS = 400
 _SERVER_ERROR_STATUS = 500
@@ -149,6 +148,13 @@ class AccessLogMiddleware:
             if emitted:
                 return
             emitted = True
+            level = _status_level(self.config, status, terminal_reason)
+            try:
+                if not self.config.logger.isEnabledFor(level):
+                    return
+            except Exception as logging_error:  # noqa: BLE001 - logging must never alter the response
+                _diagnostic("access log emission failed", logging_error)
+                return
             duration_ms = _duration_ms(clock, start)
             fields = _access_fields(scope, status, duration_ms, self.config)
             fields.update(_context_fields(self.config.preset, context))
@@ -159,12 +165,12 @@ class AccessLogMiddleware:
             if self.config.extra_fields is not None:
                 try:
                     custom_fields = self.config.extra_fields(scope)
-                    fields.update({key: value for key, value in custom_fields.items() if key not in _RESERVED_FIELDS})
+                    fields.update({key: value for key, value in custom_fields.items() if not _is_reserved_field(key)})
                 except Exception as callback_error:  # noqa: BLE001 - application callbacks are untrusted
                     _diagnostic("access extra-fields callback failed", callback_error)
             try:
                 self.config.logger.log(
-                    _status_level(self.config, status, terminal_reason),
+                    level,
                     "request completed",
                     extra={_ACCESS_FIELDS_KEY: fields},
                 )
@@ -193,7 +199,7 @@ class AccessLogMiddleware:
         try:
             await self.app(scope, receive, send_with_observation)
             if not emitted:
-                emit(terminal_reason="response_dropped" if status is not None else "unknown_failure")
+                emit(terminal_reason="response_dropped")
         except BaseException as error:
             terminal_reason = _terminal_reason(error, status, downstream_disconnect)
             emit(error, terminal_reason)
@@ -278,26 +284,16 @@ def _canonical_route_template(native_template: str) -> str | None:
     canonical: list[str] = []
     segments = native_template[1:].split("/")
     for index, segment in enumerate(segments):
-
-        def replace_placeholder(
-            match: re.Match[str],
-            *,
-            segment_index: int = index,
-            native_segment: str = segment,
-        ) -> str:
-            catch_all = match.group("converter") == "path"
-            if catch_all and (segment_index != len(segments) - 1 or match.span() != (0, len(native_segment))):
-                raise ValueError
-            return f"{{{'*' if catch_all else ''}{match.group('name')}}}"
-
-        try:
-            normalized = _ROUTE_PLACEHOLDER.sub(replace_placeholder, segment)
-        except ValueError:
+        match = _ROUTE_PLACEHOLDER.fullmatch(segment)
+        if match is None:
+            if any(token in segment for token in ("{", "}", "*")):
+                return None
+            canonical.append(segment)
+            continue
+        catch_all = match.group("converter") == "path"
+        if catch_all and index != len(segments) - 1:
             return None
-        unmatched = _ROUTE_PLACEHOLDER.sub("", segment)
-        if any(token in unmatched for token in ("{", "}", "*")):
-            return None
-        canonical.append(normalized)
+        canonical.append(f"{{{'*' if catch_all else ''}{match.group('name')}}}")
     return f"/{'/'.join(canonical)}"
 
 
@@ -394,6 +390,8 @@ def _single_valid_header(scope: _Scope, name: str) -> str | None:
     if (
         len(values) != 1
         or not values[0]
+        or values[0][0] in " \t"
+        or values[0][-1] in " \t"
         or any(
             (ord(character) < _FIRST_CONTROL_CODEPOINT and character != "\t") or ord(character) == _DELETE_CODEPOINT
             for character in values[0]
@@ -413,7 +411,13 @@ def _protobuf_duration(duration_ms: float) -> str | None:
         nanos = 0
     if nanos == 0:
         return f"{seconds}s"
-    return f"{seconds}.{nanos:09d}".rstrip("0") + "s"
+    if nanos % 1_000_000 == 0:
+        fraction = f"{nanos // 1_000_000:03d}"
+    elif nanos % 1_000 == 0:
+        fraction = f"{nanos // 1_000:06d}"
+    else:
+        fraction = f"{nanos:09d}"
+    return f"{seconds}.{fraction}s"
 
 
 def _diagnostic(message: str, error: Exception) -> None:

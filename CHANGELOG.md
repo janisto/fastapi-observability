@@ -49,6 +49,8 @@ constructor layouts or compatibility-only options.
 
 ### Changed
 
+- Expanded the provider-neutral basic example with the Level 1 default, an
+  explicit Level 2 application factory, and behavioral output tests.
 - Removed v1 positional-constructor and fixed-value option shims so the v2
   surface has one explicit configuration form.
 - Set distribution and lock metadata to `2.0.0` so package validation cannot
@@ -74,11 +76,20 @@ constructor layouts or compatibility-only options.
   reasons with `ERROR` severity while preserving original failures.
 - Normalized nested mapping keys before JSON encoding and retained the first
   value on a normalized-name collision, preventing duplicate raw JSON members.
-- **Breaking:** Canonicalized explicit FastAPI route converters to portable
-  `{name}` and `{*name}` templates while omitting ambiguous native forms.
+- **Breaking:** Canonicalized whole-segment FastAPI route converters to portable
+  `{name}` and `{*name}` templates while omitting composite or ambiguous native
+  forms; explicit operation IDs remain available when a template is omitted.
 
 ### Fixed
 
+- Enforce all reserved field namespaces on application extras and access
+  callbacks, including future provider and package-owned names.
+- Emit GCP `httpRequest.latency` with canonical ProtoJSON fractional widths:
+  0, 3, 6, or 9 digits according to the required precision.
+- Apply the RFC 9110 field-content boundary before custom request-ID validation,
+  admit internal space, tab, or a comma in one field-line, retain a native
+  direct-construction guard for edge whitespace, and classify every incomplete
+  ASGI return as `response_dropped`.
 - Preserve composite FastAPI route metadata, HTTP-safe opaque future
   `traceparent` suffixes without an invented length cap, HTAB User-Agent values,
   nonempty static operation IDs, and exact downstream-send disconnect

@@ -155,9 +155,10 @@ The response header, input headers, generator, and validator are configurable
 with `RequestContextConfig`. Generated values are validated too, and an invalid
 custom generator falls back to the package's safe format. Without a custom
 validator, caller IDs use the same URI-unreserved baseline. A custom validator
-may admit any nonempty visible-ASCII caller value, including punctuation such
-as `!` or `:` and values longer than 128 characters; controls, whitespace, DEL,
-and non-ASCII remain outside this ASGI adapter's response-header boundary.
+may admit broader RFC 9110 field content inside this adapter's ASCII response
+boundary, including punctuation, internal space or tab, and values longer than
+128 characters. Empty values, edge whitespace, other controls, DEL, and
+non-ASCII remain outside this adapter's exact response-header boundary.
 Generated and fallback IDs always retain the package baseline.
 Accessors return `None` outside a request; no background-job context is
 manufactured.
@@ -194,6 +195,12 @@ trace_level = TraceContextLevel.LEVEL_2
 access_config = AccessLogConfig(trace_context_level=trace_level)
 request_context_config = RequestContextConfig(trace_context_level=trace_level)
 ```
+
+The provider-neutral [`examples/basic/main.py`](examples/basic/main.py) leaves
+the trace-level option unset for its default Level 1 `app`. To enable Level 2,
+run `create_level_2_app()`, which passes `TraceContextLevel.LEVEL_2` to both
+middleware configurations. Native tests send flags `03` through both paths and
+verify that only Level 2 emits `trace_id_random`.
 
 Values other than `1` or `2` fail configuration immediately. Both levels
 preserve `trace_flags` and derive `trace_sampled` from bit zero. For version
@@ -235,13 +242,14 @@ The access record message is `request completed` and includes:
 | `duration_ms` | Handling and streaming time in milliseconds |
 | `terminal_reason` | Standard reason for abnormal completion; absent after normal completion |
 | `peer_ip` | Opt-in canonical direct IP from `scope["client"][0]`; hostnames and zoned values are omitted |
-| `user_agent` | Opt-in single nonempty incoming user agent without control characters |
+| `user_agent` | Opt-in single UTF-8 RFC 9110 field-content value |
 | `error` | Opt-in privacy-sensitive exception type and message (`capture_error=True`) |
 
 The default level is `ERROR` for abnormal completion or a normal 5xx,
 `WARNING` for a normal 4xx, and `INFO` otherwise.
-Package and provider fields are reserved: `extra` values and access callbacks
-cannot replace them.
+Package and provider fields and the `logging.googleapis.com/`, `obs.`, and
+`_obs_` namespaces are reserved: application `extra` values and access
+callbacks cannot replace them.
 
 `AccessLogConfig` also accepts independent `capture_path`, `capture_peer_ip`,
 `capture_user_agent`, and `capture_error` booleans, all defaulting to `False`; a monotonic
@@ -325,8 +333,8 @@ exception unchanged. It never synthesizes a replacement 500 response.
   `client_disconnect` and preserves the original exception. An application or
   body-generator `OSError` remains a service or body failure.
 - Cancellation uses terminal reason `cancelled`. An application that returns
-  without a complete response uses `response_dropped` after response start or
-  `unknown_failure` before it.
+  without a complete response uses `response_dropped`, with status present only
+  when response start was accepted.
 - Access emission occurs after the final response body event, or after the final
   response-trailers event when trailers were declared, so duration includes
   streaming and trailers but excludes later Starlette background work.

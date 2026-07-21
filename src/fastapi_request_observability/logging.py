@@ -131,6 +131,12 @@ _RESERVED_FIELDS = frozenset(
 )
 
 
+def _is_reserved_field(key: object) -> bool:
+    return isinstance(key, str) and (
+        key in _RESERVED_FIELDS or key.startswith(("logging.googleapis.com/", "obs.", "_obs_"))
+    )
+
+
 class JSONFormatter(logging.Formatter):
     """Format one compact JSON object; a stream handler supplies the NDJSON LF."""
 
@@ -170,7 +176,7 @@ class JSONFormatter(logging.Formatter):
             {
                 key: value
                 for key, value in record.__dict__.items()
-                if key not in _STANDARD_RECORD_FIELDS and key not in _RESERVED_FIELDS and not key.startswith("_")
+                if key not in _STANDARD_RECORD_FIELDS and not _is_reserved_field(key) and not key.startswith("_")
             }
         )
 

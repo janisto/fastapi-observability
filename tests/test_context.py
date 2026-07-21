@@ -221,8 +221,8 @@ def test_custom_validator_cannot_admit_values_outside_the_native_header_boundary
     assert context.request_id == "safe-id"
 
 
-@pytest.mark.parametrize("value", ["!", "id:42", "x" * 129])
-def test_custom_validator_can_broaden_visible_ascii_caller_ids(value):
+@pytest.mark.parametrize("value", ["!", "id:42", "x" * 129, "tenant request", "tenant\trequest", "tenant,request"])
+def test_custom_validator_can_broaden_rfc_field_content_inside_asgi_ascii_boundary(value):
     context = _build_context(
         [(b"x-request-id", value.encode("ascii"))],
         request_id_header="X-Request-ID",
@@ -232,6 +232,28 @@ def test_custom_validator_can_broaden_visible_ascii_caller_ids(value):
         validator=lambda _value: True,
     )
     assert context.request_id == value
+
+
+@pytest.mark.parametrize("value", [" tenant", "tenant ", "\ttenant", "tenant\t"])
+def test_custom_validator_cannot_admit_edge_whitespace(value):
+    calls = 0
+
+    def validator(_value):
+        nonlocal calls
+        calls += 1
+        return True
+
+    context = _build_context(
+        [(b"x-request-id", value.encode("ascii"))],
+        request_id_header="X-Request-ID",
+        traceparent_header="traceparent",
+        tracestate_header="tracestate",
+        generator=lambda: "safe-id",
+        validator=validator,
+    )
+
+    assert context.request_id == "safe-id"
+    assert calls == 0
 
 
 @pytest.mark.parametrize("value", ["A", "~"])

@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -42,7 +43,7 @@ def test_standard_stream_handler_writes_each_event_as_one_lf_terminated_ndjson_o
         logger.handlers[:] = [handler]
         logger.setLevel(logging.INFO)
         logger.propagate = False
-        logger.info("first\nlogical message")
+        logger.info("first ✓\nlogical message")
         logger.error("second message")
     finally:
         logger.handlers[:] = previous_handlers
@@ -56,7 +57,38 @@ def test_standard_stream_handler_writes_each_event_as_one_lf_terminated_ndjson_o
     assert len(lines) == 2
     records = [json.loads(line) for line in lines]
     assert all(isinstance(record, dict) for record in records)
-    assert [record["message"] for record in records] == ["first\nlogical message", "second message"]
+    assert [record["message"] for record in records] == ["first ✓\nlogical message", "second message"]
+
+
+def test_concurrent_stream_handler_writes_are_complete_and_unique():
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(JSONFormatter())
+    logger = logging.getLogger("test.concurrent-ndjson")
+    previous_handlers = list(logger.handlers)
+    previous_level = logger.level
+    previous_propagate = logger.propagate
+    try:
+        logger.handlers[:] = [handler]
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            list(
+                executor.map(
+                    lambda index: logger.info("concurrent", extra={"record_id": f"record-{index}"}),
+                    range(200),
+                )
+            )
+    finally:
+        logger.handlers[:] = previous_handlers
+        logger.setLevel(previous_level)
+        logger.propagate = previous_propagate
+
+    lines = output.getvalue().splitlines()
+    assert len(lines) == 200
+    records = [json.loads(line) for line in lines]
+    assert {record["record_id"] for record in records} == {f"record-{index}" for index in range(200)}
+    assert {record["message"] for record in records} == {"concurrent"}
 
 
 def _unique_object(pairs):
@@ -238,6 +270,9 @@ def test_reserved_extra_fields_are_ignored():
         "error": "spoofed",
         "httpRequest": "spoofed",
         "source": "spoofed",
+        "logging.googleapis.com/future": "spoofed",
+        "obs.internal": "spoofed",
+        "_obs_internal": "spoofed",
     }
     record.__dict__.update(spoofed_fields)
 
