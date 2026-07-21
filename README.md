@@ -152,9 +152,10 @@ bits of randomness. The selected value is available from:
 - application and access logs.
 
 The response header, input headers, generator, and validator are configurable
-with `RequestContextConfig`. Generated values are validated too, and an invalid
-custom generator falls back to the package's safe format. Without a custom
-validator, caller IDs use the same URI-unreserved baseline. A custom validator
+with `RequestContextConfig`. A custom generator is called once. Its result is
+validated; an invalid result or exception falls back to the package's safe
+format. Without a custom validator, caller IDs use the same URI-unreserved
+baseline. A custom validator
 may admit broader RFC 9110 field content inside this adapter's ASCII response
 boundary, including punctuation, internal space or tab, and values longer than
 128 characters. Empty values, edge whitespace, other controls, DEL, and
@@ -236,20 +237,22 @@ The access record message is `request completed` and includes:
 | --- | --- |
 | `method` | HTTP method |
 | `path` | Opt-in escaped wire path, without query string; omitted when ASGI exposes decoded-only path data |
-| `path_template` | Canonical matched template (`{name}` or `{*name}`) when available |
+| `path_template` | Matched low-cardinality route template; simple FastAPI placeholders use `{name}` or `{*name}`, while richer authoritative native syntax is preserved |
 | `operation_id` | Only an explicitly configured `APIRoute.operation_id` |
 | `status` | Status accepted by the downstream ASGI sender, when observed |
 | `duration_ms` | Handling and streaming time in milliseconds |
 | `terminal_reason` | Standard reason for abnormal completion; absent after normal completion |
 | `peer_ip` | Opt-in canonical direct IP from `scope["client"][0]`; hostnames and zoned values are omitted |
-| `user_agent` | Opt-in single UTF-8 RFC 9110 field-content value |
+| `user_agent` | Opt-in single RFC 9110 field-content value using the lossless Latin-1 mapping of ASGI header bytes |
 | `error` | Opt-in privacy-sensitive exception type and message (`capture_error=True`) |
 
 The default level is `ERROR` for abnormal completion or a normal 5xx,
 `WARNING` for a normal 4xx, and `INFO` otherwise.
-Package and provider fields and the `logging.googleapis.com/`, `obs.`, and
-`_obs_` namespaces are reserved: application `extra` values and access
-callbacks cannot replace them.
+Field ownership is contextual and exact. Application `extra` values cannot
+replace envelope, request-context, or selected-profile fields written by the
+formatter, but may use access-only names, exact aliases owned only by an
+inactive provider profile, and unrelated custom namespaces. Access callbacks
+additionally cannot replace the exact fields written by access enrichment.
 
 `AccessLogConfig` also accepts independent `capture_path`, `capture_peer_ip`,
 `capture_user_agent`, and `capture_error` booleans, all defaulting to `False`; a monotonic
@@ -268,7 +271,8 @@ logged.
 
 FastAPI whole-segment path converters are normalized: ordinary converters such
 as `{item_id:int}` emit `{item_id}`, while `{path:path}` emits `{*path}`.
-Ambiguous native forms are omitted rather than populated with request data.
+Richer authoritative matched templates are preserved in native syntax rather
+than replaced with request data. Unmatched requests omit route identity.
 
 ## Cloud presets
 

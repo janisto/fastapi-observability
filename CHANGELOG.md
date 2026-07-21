@@ -76,14 +76,16 @@ constructor layouts or compatibility-only options.
   reasons with `ERROR` severity while preserving original failures.
 - Normalized nested mapping keys before JSON encoding and retained the first
   value on a normalized-name collision, preventing duplicate raw JSON members.
-- **Breaking:** Canonicalized whole-segment FastAPI route converters to portable
-  `{name}` and `{*name}` templates while omitting composite or ambiguous native
-  forms; explicit operation IDs remain available when a template is omitted.
+- **Breaking:** Canonicalized simple whole-segment FastAPI route converters to
+  portable `{name}` and `{*name}` templates while preserving richer
+  authoritative matched templates in native syntax.
 
 ### Fixed
 
-- Enforce all reserved field namespaces on application extras and access
-  callbacks, including future provider and package-owned names.
+- Enforce exact, contextual field ownership: application extras may use
+  access-only names, exact aliases owned only by an inactive provider profile,
+  and unrelated names, while access callbacks cannot replace fields written by
+  access enrichment.
 - Emit GCP `httpRequest.latency` with canonical ProtoJSON fractional widths:
   0, 3, 6, or 9 digits according to the required precision.
 - Apply the RFC 9110 field-content boundary before custom request-ID validation,
@@ -98,7 +100,13 @@ constructor layouts or compatibility-only options.
   latency without precision loss, and omit only an unrepresentable provider
   projection.
 
-- Omitted malformed percent-escaped raw paths instead of emitting them.
+- Preserve the escaped representation of every nonempty ASGI raw-path byte
+  sequence, including existing malformed percent triplets that reached
+  middleware and the `*` request target.
+- Call a configured request-ID generator once, then use the package fallback
+  for an exception or invalid result.
+- Document and test User-Agent projection as the lossless Latin-1 mapping of
+  ASGI header bytes rather than claiming UTF-8 decoding.
 - Ignored non-encodable Python strings instead of allowing malformed
   `traceparent` input to raise `UnicodeEncodeError`.
 - Preserved sampling while omitting the Level 2 random flag for unknown future

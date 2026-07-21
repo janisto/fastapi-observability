@@ -9,6 +9,7 @@ from typing import Any, override
 import pytest
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
+from fastapi.routing import APIRoute
 
 from fastapi_request_observability import (
     AccessLogConfig,
@@ -39,7 +40,6 @@ TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 RESERVED_CALLBACK_FIELDS = {
     "timestamp",
     "level",
-    "severity",
     "logger",
     "message",
     "stacktrace",
@@ -50,12 +50,6 @@ RESERVED_CALLBACK_FIELDS = {
     "trace_flags",
     "trace_sampled",
     "trace_id_random",
-    "logging.googleapis.com/trace",
-    "logging.googleapis.com/trace_sampled",
-    "logging.googleapis.com/spanId",
-    "xray_trace_id",
-    "operation_Id",
-    "operation_ParentId",
     "method",
     "path",
     "path_template",
@@ -64,10 +58,8 @@ RESERVED_CALLBACK_FIELDS = {
     "duration_ms",
     "terminal_reason",
     "peer_ip",
-    "remote_ip",
     "user_agent",
     "error",
-    "httpRequest",
     "source",
 }
 
@@ -427,11 +419,11 @@ async def test_route_query_operation_peer_and_context_fields():
         ("/items/{item_id}", "/items/{item_id}"),
         (f"/items/{{{'a' * 65}}}", f"/items/{{{'a' * 65}}}"),
         ("/items/{item_id:int}", "/items/{item_id}"),
-        ("/reports/report-{year:int}.csv", None),
-        ("/compare/{left:int}-to-{right:int}", None),
+        ("/reports/report-{year:int}.csv", "/reports/report-{year:int}.csv"),
+        ("/compare/{left:int}-to-{right:int}", "/compare/{left:int}-to-{right:int}"),
         ("/files/{path:path}", "/files/{*path}"),
-        ("/files/{path:path}/suffix", None),
-        ("/items/{item_id?}", None),
+        ("/files/{path:path}/suffix", "/files/{path:path}/suffix"),
+        ("*", "*"),
     ],
 )
 def test_route_template_canonicalizes_current_fastapi_forms(native, expected):
@@ -449,6 +441,27 @@ def test_hostile_route_metadata_is_omitted_without_escaping(capsys):
     diagnostic = capsys.readouterr().err
     assert "access route metadata failed: RuntimeError" in diagnostic
     assert "private route metadata" not in diagnostic
+
+
+def test_fastapi_route_language_requires_distinct_omitted_and_present_route_identities():
+    app = FastAPI()
+
+    async def endpoint():
+        return {"ok": True}
+
+    app.add_api_route("/items", endpoint, methods=["GET"])
+    app.add_api_route("/items/{item_id}", endpoint, methods=["GET"])
+    app.add_api_route("/optional/{item_id?}", endpoint, methods=["GET"])
+
+    routes = {route.path: route for route in app.routes if isinstance(route, APIRoute)}
+    assert routes["/items"].path_regex.fullmatch("/items") is not None
+    assert routes["/items/{item_id}"].path_regex.fullmatch("/items/value") is not None
+
+    optional_marker = routes["/optional/{item_id?}"]
+    assert optional_marker.param_convertors == {}
+    assert optional_marker.path_regex.fullmatch("/optional") is None
+    assert optional_marker.path_regex.fullmatch("/optional/value") is None
+    assert optional_marker.path_regex.fullmatch("/optional/{item_id?}") is not None
 
 
 async def test_representative_route_identity_has_stable_cardinality():
@@ -493,11 +506,28 @@ async def test_representative_route_identity_has_stable_cardinality():
         ("/items/{item_id}", "get_item"),
         ("/items/{item_id}", "get_item"),
         (f"/long/{{{long_name}}}", "get_long"),
-        (None, "get_report"),
-        (None, "compare_reports"),
+        ("/reports/report-{year:int}.csv", "get_report"),
+        ("/compare/{left:int}-to-{right:int}", "compare_reports"),
         ("/files/{*path}", "get_file"),
         ("/files/{*path}", "get_file"),
     ]
+
+
+async def test_composite_route_without_explicit_operation_id_keeps_native_identity():
+    handler = JSONCaptureHandler()
+    app = FastAPI()
+    app.add_middleware(AccessLogMiddleware, config=AccessLogConfig(logger=_logger(handler)))
+    app.add_middleware(RequestContextMiddleware)
+
+    @app.get("/reports/report-{year:int}.csv")
+    async def report(year: int):
+        return {"year": year}
+
+    async with asgi_client(app) as client:
+        assert (await client.get("/reports/report-2026.csv")).status_code == 200
+
+    assert handler.entries[0]["path_template"] == "/reports/report-{year:int}.csv"
+    assert "operation_id" not in handler.entries[0]
 
 
 async def test_operation_id_with_control_character_is_preserved_as_json_data():
@@ -1171,8 +1201,11 @@ async def test_custom_fields_receive_final_scope_and_cannot_override_reserved_fi
         return {
             **dict.fromkeys(RESERVED_CALLBACK_FIELDS, "spoofed"),
             "logging.googleapis.com/future": "spoofed",
+            "logging.googleapis.com/labels": {"component": "worker"},
+            "logging.googleapis.com/spanId": "spoofed",
             "obs.internal": "spoofed",
             "_obs_internal": "spoofed",
+            "remote_ip": "spoofed",
             "tenant": scope["path"],
             "callback_path_template": scope["route"].path,
         }
@@ -1188,14 +1221,12 @@ async def test_custom_fields_receive_final_scope_and_cannot_override_reserved_fi
     assert entry["tenant"] == "/items/1"
     assert entry["callback_path_template"] == "/items/{item_id}"
     assert not {key for key in RESERVED_CALLBACK_FIELDS if entry.get(key) == "spoofed"}
-    assert (
-        not {
-            "logging.googleapis.com/future",
-            "obs.internal",
-            "_obs_internal",
-        }
-        & entry.keys()
-    )
+    assert entry["logging.googleapis.com/future"] == "spoofed"
+    assert entry["logging.googleapis.com/labels"] == {"component": "worker"}
+    assert entry["logging.googleapis.com/spanId"] == "spoofed"
+    assert entry["obs.internal"] == "spoofed"
+    assert entry["_obs_internal"] == "spoofed"
+    assert entry["remote_ip"] == "spoofed"
     assert {
         key: entry[key]
         for key in (
@@ -1220,6 +1251,58 @@ async def test_custom_fields_receive_final_scope_and_cannot_override_reserved_fi
         "path_template": "/items/{item_id}",
         "status": 200,
     }
+
+
+@pytest.mark.parametrize(
+    ("preset", "owned"),
+    [
+        (LoggingPreset.DEFAULT, {"level": "INFO"}),
+        (
+            LoggingPreset.GCP,
+            {
+                "severity": "INFO",
+                "logging.googleapis.com/trace": TRACEPARENT[3:35],
+                "logging.googleapis.com/trace_sampled": True,
+            },
+        ),
+        (
+            LoggingPreset.AWS,
+            {"level": "INFO", "xray_trace_id": f"1-{TRACEPARENT[3:11]}-{TRACEPARENT[11:35]}"},
+        ),
+        (
+            LoggingPreset.AZURE,
+            {
+                "level": "INFO",
+                "operation_Id": TRACEPARENT[3:35],
+                "operation_ParentId": TRACEPARENT[36:52],
+            },
+        ),
+    ],
+)
+async def test_access_profile_ownership_blocks_active_spoofs_and_retains_inactive_fields(preset, owned):
+    spoofed = {
+        "level": "spoofed-level",
+        "severity": "spoofed-severity",
+        "httpRequest": {"spoofed": True},
+        "logging.googleapis.com/trace": "spoofed-gcp-trace",
+        "logging.googleapis.com/trace_sampled": False,
+        "xray_trace_id": "spoofed-xray-trace",
+        "operation_Id": "spoofed-azure-operation",
+        "operation_ParentId": "spoofed-azure-parent",
+    }
+    handler = JSONCaptureHandler(preset)
+
+    async with asgi_client(_app(handler, preset=preset, extra_fields=lambda _scope: dict(spoofed))) as client:
+        response = await client.get("/items/1", headers={"traceparent": TRACEPARENT})
+
+    assert response.status_code == 200
+    entry = handler.entries[0]
+    expected = {**spoofed, **owned}
+    if preset is LoggingPreset.GCP:
+        expected.pop("httpRequest")
+        assert entry["httpRequest"]["requestMethod"] == "GET"
+        assert entry["httpRequest"]["status"] == 200
+    assert {key: entry[key] for key in expected} == expected
 
 
 async def test_extra_fields_callback_failure_is_diagnosed_and_nonfatal(capsys):
@@ -1801,8 +1884,10 @@ async def test_user_agent_preserves_valid_internal_space():
     ("scope", "expected"),
     [
         ({"raw_path": b"/items/%2F%ff", "path": "/items//�"}, "/items/%2F%ff"),
-        ({"raw_path": b"/objects/bad%2", "path": "/objects/bad%2"}, None),
-        ({"raw_path": b"/objects/bad%GG", "path": "/objects/bad%GG"}, None),
+        ({"raw_path": b"/objects/bad%2", "path": "/objects/bad%2"}, "/objects/bad%2"),
+        ({"raw_path": b"/objects/bad%GG", "path": "/objects/bad%GG"}, "/objects/bad%GG"),
+        ({"raw_path": b"/widgets/a#literal", "path": "/widgets/a#literal"}, "/widgets/a%23literal"),
+        ({"raw_path": b"*", "path": "*"}, "*"),
         ({"path": "/items/é"}, None),
         ({"path": "/items/a:b@c;d=e"}, None),
         ({"path": ""}, None),
@@ -1810,6 +1895,61 @@ async def test_user_agent_preserves_valid_internal_space():
 )
 def test_request_path_uses_only_wire_encoding(scope, expected):
     assert _request_path(scope) == expected
+
+
+async def test_access_middleware_uses_only_the_nonempty_asgi_raw_path_boundary():
+    handler = JSONCaptureHandler()
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    middleware = AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler), capture_path=True))
+    for raw_path in [b"", b"/objects/bad%2", b"*", b"/widgets/a#literal"]:
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": raw_path.decode("ascii"),
+            "raw_path": raw_path,
+            "headers": [],
+            "state": {},
+        }
+        await middleware(scope, _empty_receive, _discard)
+
+    assert [entry.get("path") for entry in handler.entries] == [
+        None,
+        "/objects/bad%2",
+        "*",
+        "/widgets/a%23literal",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (b"agent/\x80\xff", "agent/\x80\xff"),
+        ("Grüße".encode(), "GrÃ¼Ãe"),
+    ],
+)
+async def test_user_agent_preserves_asgi_header_bytes_with_latin_1_mapping(value, expected):
+    handler = JSONCaptureHandler()
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "raw_path": b"/",
+        "headers": [(b"user-agent", value)],
+        "state": {},
+    }
+    await AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler), capture_user_agent=True))(
+        scope, _empty_receive, _discard
+    )
+    assert handler.entries[0]["user_agent"] == expected
 
 
 @pytest.mark.parametrize(

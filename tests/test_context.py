@@ -108,7 +108,7 @@ def test_duplicate_traceparent_is_invalid():
     assert context.correlation_id == "request-2"
 
 
-def test_invalid_generator_is_retried_then_safe_fallback_is_used():
+def test_invalid_generator_is_called_once_then_safe_fallback_is_used():
     calls = 0
 
     def invalid_generator():
@@ -117,7 +117,7 @@ def test_invalid_generator_is_retried_then_safe_fallback_is_used():
         return "invalid value"
 
     generated = _new_valid_request_id(invalid_generator)
-    assert calls == 2
+    assert calls == 1
     _assert_default_generated_request_id(generated)
 
 
@@ -134,18 +134,6 @@ def test_custom_validator_rejects_only_caller_input_not_generated_candidates():
     assert context.request_id == "generated"
 
 
-def test_generator_exception_is_retried_before_falling_back():
-    attempts = iter([RuntimeError("temporary failure"), "recovered"])
-
-    def flaky_generator():
-        result = next(attempts)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    assert _new_valid_request_id(flaky_generator) == "recovered"
-
-
 def test_custom_generator_exception_uses_fallback():
     def broken_generator():
         raise RuntimeError("broken")
@@ -154,7 +142,7 @@ def test_custom_generator_exception_uses_fallback():
 
 
 @pytest.mark.parametrize("candidate", [None, 42, b"bytes"])
-def test_non_string_generator_results_are_retried_then_replaced(candidate):
+def test_non_string_generator_results_are_called_once_then_replaced(candidate):
     calls = 0
 
     def generator():
@@ -164,7 +152,7 @@ def test_non_string_generator_results_are_retried_then_replaced(candidate):
 
     generated = _new_valid_request_id(generator)
 
-    assert calls == 2
+    assert calls == 1
     _assert_default_generated_request_id(generated)
 
 

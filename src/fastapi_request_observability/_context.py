@@ -83,13 +83,12 @@ def _default_validate_request_id(value: str) -> bool:
 
 
 def _new_valid_request_id(generator: RequestIDGenerator) -> str:
-    for _ in range(2):
-        try:
-            candidate = generator()
-        except Exception:  # noqa: BLE001, S112 - application callback failures must not break requests
-            continue
-        if isinstance(candidate, str) and _default_validate_request_id(candidate):
-            return candidate
+    try:
+        candidate = generator()
+    except Exception:  # noqa: BLE001 - application callback failures must not break requests
+        candidate = None
+    if isinstance(candidate, str) and _default_validate_request_id(candidate):
+        return candidate
 
     fallback = _default_request_id()
     # A custom validator may reject every safe value. The final value must

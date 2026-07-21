@@ -236,7 +236,7 @@ def test_mapping_keys_are_normalized_before_encoding_without_raw_duplicates():
     assert parsed["structured"] == {"1": {"2": "first"}}
 
 
-def test_reserved_extra_fields_are_ignored():
+def test_application_extra_fields_use_contextual_exact_ownership():
     record = _record()
     spoofed_fields = {
         "timestamp": "spoofed",
@@ -264,6 +264,7 @@ def test_reserved_extra_fields_are_ignored():
         "operation_id": "spoofed",
         "status": "spoofed",
         "duration_ms": "spoofed",
+        "terminal_reason": "spoofed",
         "peer_ip": "spoofed",
         "remote_ip": "spoofed",
         "user_agent": "spoofed",
@@ -271,8 +272,10 @@ def test_reserved_extra_fields_are_ignored():
         "httpRequest": "spoofed",
         "source": "spoofed",
         "logging.googleapis.com/future": "spoofed",
+        "logging.googleapis.com/labels": {"component": "worker"},
         "obs.internal": "spoofed",
         "_obs_internal": "spoofed",
+        "_fastapi_request_observability_access_fields": {"trusted_injection": "spoofed"},
     }
     record.__dict__.update(spoofed_fields)
 
@@ -282,7 +285,73 @@ def test_reserved_extra_fields_are_ignored():
     assert parsed["level"] == "INFO"
     assert parsed["logger"] == "test.logger"
     assert parsed["message"] == "hello world"
-    assert not (spoofed_fields.keys() - {"timestamp", "level", "logger", "message"}) & parsed.keys()
+    protected = {
+        "timestamp",
+        "level",
+        "logger",
+        "message",
+        "stacktrace",
+        "request_id",
+        "correlation_id",
+        "trace_id",
+        "parent_id",
+        "trace_flags",
+        "trace_sampled",
+        "trace_id_random",
+        "source",
+    }
+    assert not (protected - {"timestamp", "level", "logger", "message"}) & parsed.keys()
+    allowed = spoofed_fields.keys() - protected
+    assert all(
+        parsed[key] == "spoofed"
+        for key in allowed
+        if key not in {"_fastapi_request_observability_access_fields", "logging.googleapis.com/labels"}
+    )
+    assert parsed["logging.googleapis.com/labels"] == {"component": "worker"}
+    assert "trusted_injection" not in parsed
+
+
+@pytest.mark.parametrize(
+    ("preset", "owned"),
+    [
+        (LoggingPreset.DEFAULT, {"level": "INFO"}),
+        (
+            LoggingPreset.GCP,
+            {
+                "severity": "INFO",
+                "logging.googleapis.com/trace": TRACE_ID,
+                "logging.googleapis.com/trace_sampled": True,
+            },
+        ),
+        (LoggingPreset.AWS, {"level": "INFO", "xray_trace_id": f"1-{TRACE_ID[:8]}-{TRACE_ID[8:]}"}),
+        (
+            LoggingPreset.AZURE,
+            {"level": "INFO", "operation_Id": TRACE_ID, "operation_ParentId": PARENT_ID},
+        ),
+    ],
+)
+def test_active_profile_fields_override_spoofs_and_inactive_fields_are_retained(preset, owned):
+    spoofed = {
+        "level": "spoofed-level",
+        "severity": "spoofed-severity",
+        "httpRequest": {"spoofed": True},
+        "logging.googleapis.com/trace": "spoofed-gcp-trace",
+        "logging.googleapis.com/trace_sampled": False,
+        "xray_trace_id": "spoofed-xray-trace",
+        "operation_Id": "spoofed-azure-operation",
+        "operation_ParentId": "spoofed-azure-parent",
+    }
+    trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01")
+    assert trace is not None
+    record = _record()
+    record.__dict__.update(spoofed)
+    token = _bind_context(RequestContext(request_id="request-1", correlation_id=TRACE_ID, trace_context=trace))
+    try:
+        parsed = json.loads(JSONFormatter(preset).format(record))
+    finally:
+        _reset_context(token)
+
+    assert {key: parsed[key] for key in spoofed} == {**spoofed, **owned}
 
 
 def test_exception_stacktrace():

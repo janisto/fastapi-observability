@@ -24,8 +24,9 @@ from .logging import (
     AzureProfileVersion,
     GcpProfileVersion,
     LoggingPreset,
+    _AccessFields,
     _context_fields,
-    _is_reserved_field,
+    _is_access_reserved_field,
     _resolve_provider_profile_versions,
 )
 from .middleware import (
@@ -165,14 +166,20 @@ class AccessLogMiddleware:
             if self.config.extra_fields is not None:
                 try:
                     custom_fields = self.config.extra_fields(scope)
-                    fields.update({key: value for key, value in custom_fields.items() if not _is_reserved_field(key)})
+                    fields.update(
+                        {
+                            key: value
+                            for key, value in custom_fields.items()
+                            if not _is_access_reserved_field(key, self.config.preset)
+                        }
+                    )
                 except Exception as callback_error:  # noqa: BLE001 - application callbacks are untrusted
                     _diagnostic("access extra-fields callback failed", callback_error)
             try:
                 self.config.logger.log(
                     level,
                     "request completed",
-                    extra={_ACCESS_FIELDS_KEY: fields},
+                    extra={_ACCESS_FIELDS_KEY: _AccessFields(fields)},
                 )
             except Exception as logging_error:  # noqa: BLE001 - logging must never alter the response
                 _diagnostic("access log emission failed", logging_error)
@@ -279,20 +286,22 @@ _ROUTE_PLACEHOLDER = re.compile(r"\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::(?P<conv
 
 
 def _canonical_route_template(native_template: str) -> str | None:
-    if not native_template.startswith("/") or "?" in native_template or "#" in native_template:
+    if not native_template:
         return None
+    if not native_template.startswith("/"):
+        return native_template
     canonical: list[str] = []
     segments = native_template[1:].split("/")
     for index, segment in enumerate(segments):
         match = _ROUTE_PLACEHOLDER.fullmatch(segment)
         if match is None:
             if any(token in segment for token in ("{", "}", "*")):
-                return None
+                return native_template
             canonical.append(segment)
             continue
         catch_all = match.group("converter") == "path"
         if catch_all and index != len(segments) - 1:
-            return None
+            return native_template
         canonical.append(f"{{{'*' if catch_all else ''}{match.group('name')}}}")
     return f"/{'/'.join(canonical)}"
 
@@ -361,17 +370,7 @@ def _access_fields(
 def _request_path(scope: _Scope) -> str | None:
     raw_path = scope.get("raw_path")
     if isinstance(raw_path, bytes) and raw_path:
-        path = quote_from_bytes(raw_path, safe="/%:@-._~!$&'()*+,;=")
-        if not path.startswith("/") or "?" in path or "#" in path:
-            return None
-        index = 0
-        while (index := path.find("%", index)) != -1:
-            if index + 2 >= len(path) or not all(
-                character in "0123456789abcdefABCDEF" for character in path[index + 1 : index + 3]
-            ):
-                return None
-            index += 3
-        return path
+        return quote_from_bytes(raw_path, safe="/%:@-._~!$&'()*+,;=")
     return None
 
 
