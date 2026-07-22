@@ -2,11 +2,27 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from fastapi_request_observability import TraceContext, parse_traceparent
+from fastapi_request_observability import (
+    TraceContext,
+    TraceContextLevel,
+    parse_traceparent,
+    resolve_trace_context_level,
+)
 from fastapi_request_observability.trace import _with_tracestate
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 PARENT_ID = "00f067aa0ba902b7"
+
+
+def test_trace_context_level_defaults_resolves_and_rejects_unsupported_values():
+    assert resolve_trace_context_level(None) is TraceContextLevel.LEVEL_1
+    assert resolve_trace_context_level(1) is TraceContextLevel.LEVEL_1
+    assert resolve_trace_context_level(TraceContextLevel.LEVEL_2) is TraceContextLevel.LEVEL_2
+    with pytest.raises(TypeError, match="unsupported trace context level"):
+        resolve_trace_context_level(True)  # noqa: FBT003 - bool must not alias integer level one
+    for value in (0, 3, "2", object()):
+        with pytest.raises(ValueError, match="unsupported trace context level"):
+            resolve_trace_context_level(value)  # ty: ignore[invalid-argument-type]
 
 
 @pytest.mark.parametrize(
@@ -27,20 +43,77 @@ PARENT_ID = "00f067aa0ba902b7"
 def test_parse_traceparent_flags(flags, sampled):
     value = f"00-{TRACE_ID}-{PARENT_ID}-{flags}"
     trace = parse_traceparent(value)
-    assert trace == TraceContext(TRACE_ID, PARENT_ID, flags, sampled, value)
+    assert trace == TraceContext(
+        trace_id=TRACE_ID,
+        parent_id=PARENT_ID,
+        flags=flags,
+        sampled=sampled,
+        traceparent=value,
+    )
 
 
-def test_future_version_accepts_base_and_dash_delimited_extension():
+@pytest.mark.parametrize(
+    ("flags", "sampled", "random"),
+    [
+        ("00", False, False),
+        ("01", True, False),
+        ("02", False, True),
+        ("03", True, True),
+        ("04", False, False),
+        ("0a", False, True),
+        ("20", False, False),
+    ],
+)
+def test_level_2_projects_sampled_and_random_bits_only(flags, sampled, random):
+    value = f"00-{TRACE_ID}-{PARENT_ID}-{flags}"
+    trace = parse_traceparent(value, TraceContextLevel.LEVEL_2)
+    assert trace is not None
+    assert trace.flags == flags
+    assert trace.sampled is sampled
+    assert trace.trace_id_random is random
+    assert trace.trace_context_level is TraceContextLevel.LEVEL_2
+
+
+def test_future_version_accepts_base_and_opaque_dash_delimited_extension():
     base = f"01-{TRACE_ID}-{PARENT_ID}-01"
     assert parse_traceparent(base) is not None
     assert parse_traceparent(f"{base}-future") is not None
+    assert parse_traceparent(f"{base}- ") is not None
+    assert parse_traceparent(f"{base}-~") is not None
     assert parse_traceparent(f"{base}future") is None
 
 
-def test_future_version_accepts_512_character_limit_and_rejects_513():
+@pytest.mark.parametrize(("flags", "sampled"), [("02", False), ("03", True)])
+def test_future_version_level_2_preserves_sampling_without_assigning_random(flags, sampled):
+    value = f"01-{TRACE_ID}-{PARENT_ID}-{flags}-opaque"
+    trace = parse_traceparent(value, TraceContextLevel.LEVEL_2)
+    assert trace is not None
+    assert trace.sampled is sampled
+    assert trace.trace_id_random is None
+    assert trace.trace_context_level is TraceContextLevel.LEVEL_2
+
+
+def test_non_encodable_traceparent_is_ignored():
+    value = f"01-{TRACE_ID}-{PARENT_ID}-01-\ud800"
+    assert parse_traceparent(value, TraceContextLevel.LEVEL_2) is None
+
+
+def test_future_version_accepts_beyond_the_former_512_byte_boundary():
     base = f"01-{TRACE_ID}-{PARENT_ID}-01"
     assert parse_traceparent(f"{base}-{'x' * 456}") is not None
-    assert parse_traceparent(f"{base}-{'x' * 457}") is None
+    assert parse_traceparent(f"{base}-{'x' * 457}") is not None
+
+
+@pytest.mark.parametrize("extension", ["opaque\x1f", "opaque\x7f", "opaque-€"])
+def test_traceparent_rejects_only_values_outside_the_native_http_boundary(extension):
+    base = f"01-{TRACE_ID}-{PARENT_ID}-01"
+    assert parse_traceparent(f"{base}-{extension}") is None
+
+
+@pytest.mark.parametrize("obs_text", ["\x80", "\xff", "ümlaut"])
+def test_traceparent_accepts_opaque_obs_text_future_data(obs_text):
+    base = f"01-{TRACE_ID}-{PARENT_ID}-01"
+    assert parse_traceparent(f"{base}-opaque-{obs_text}") is not None
 
 
 @pytest.mark.parametrize("separator_index", [2, 35, 52])
@@ -62,8 +135,6 @@ def test_each_required_traceparent_separator_is_validated_independently(separato
         f"00-{TRACE_ID}-{PARENT_ID}-zz",
         f"00-{TRACE_ID}-{PARENT_ID}-01-extra",
         f"00_{TRACE_ID}-{PARENT_ID}-01",
-        f"01-{TRACE_ID}-{PARENT_ID}-01-é",
-        f"01-{TRACE_ID}-{PARENT_ID}-01-{'x' * 458}",
     ],
 )
 def test_rejects_invalid_traceparent(value):
@@ -76,20 +147,22 @@ def test_tracestate_combines_multiple_headers_in_wire_order():
     assert _with_tracestate(trace, ["one=1", "two=2"]).tracestate == "one=1,two=2"
 
 
-def test_tracestate_accepts_512_byte_limit_and_rejects_513():
+def test_tracestate_accepts_512_and_513_character_values():
     trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01")
     assert trace is not None
     maximum = f"{'a' * 256}={'b' * 255}"
     assert len(maximum) == 512
     assert _with_tracestate(trace, [maximum]).tracestate == maximum
-    assert _with_tracestate(trace, [f"{'a' * 256}={'b' * 256}"]).tracestate is None
+    over_former_minimum = f"{'a' * 256}={'b' * 256}"
+    assert len(over_former_minimum) == 513
+    assert _with_tracestate(trace, [over_former_minimum]).tracestate == over_former_minimum
 
 
-def test_empty_tracestate_does_not_create_an_empty_context_field():
+def test_missing_and_present_empty_tracestate_remain_distinguishable():
     trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01")
     assert trace is not None
     assert _with_tracestate(trace, []).tracestate is None
-    assert _with_tracestate(trace, [""]).tracestate is None
+    assert _with_tracestate(trace, [""]).tracestate == ""
 
 
 def test_tracestate_accepts_exact_32_member_limit():
@@ -149,7 +222,38 @@ def test_tracestate_accepts_ows_empty_members_and_valid_multi_tenant_key():
     trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01")
     assert trace is not None
     value = " tenant1@system=value with spaces , ,second=two\t"
-    assert _with_tracestate(trace, [value]).tracestate == value
+    assert _with_tracestate(trace, [value]).tracestate == "tenant1@system=value with spaces,,second=two"
+
+
+def test_tracestate_canonicalizes_split_field_lines_and_separator_whitespace():
+    trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01")
+    assert trace is not None
+    assert (
+        _with_tracestate(trace, ["  vendor1=value1  ", "\tvendor2= value2\t"]).tracestate
+        == "vendor1=value1,vendor2= value2"
+    )
+
+
+@pytest.mark.parametrize("key", ["1", "tenant@sub@system"])
+def test_level_2_tracestate_accepts_level_2_key_grammar(key):
+    trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01", TraceContextLevel.LEVEL_2)
+    assert trace is not None
+    tracestate = f"{key}=value"
+    assert _with_tracestate(trace, [tracestate]).tracestate == tracestate
+
+
+@pytest.mark.parametrize("value", ["@vendor=value", "Vendor=value", "vendor=first,vendor=second"])
+def test_level_2_tracestate_rejects_invalid_or_duplicate_keys(value):
+    trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01", TraceContextLevel.LEVEL_2)
+    assert trace is not None
+    assert _with_tracestate(trace, [value]).tracestate is None
+
+
+def test_level_2_tracestate_canonicalizes_separator_whitespace():
+    trace = parse_traceparent(f"00-{TRACE_ID}-{PARENT_ID}-01", TraceContextLevel.LEVEL_2)
+    assert trace is not None
+    value = "vendor=value \t, \t1@two= leading\t"
+    assert _with_tracestate(trace, [value]).tracestate == "vendor=value,1@two= leading"
 
 
 @pytest.mark.parametrize("value", ["!", "+", "-", "<", ">", "~", "A", "a b"])

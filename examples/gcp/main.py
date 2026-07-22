@@ -41,7 +41,7 @@ async def health() -> dict[str, bool]:
         "health check",
         extra={
             "service_name": "example-service",
-            "service_version": "1.4.2",
+            "service_version": "1.0.0",
             "health_status": "ok",
         },
     )

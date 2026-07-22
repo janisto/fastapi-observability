@@ -2,6 +2,8 @@
 # https://github.com/casey/just
 # Development and release checks for fastapi-request-observability.
 
+CONTAINER_RUNTIME := if `command -v podman 2>/dev/null || true` != "" { "podman" } else { "docker" }
+
 @_:
     just --list
 
@@ -57,6 +59,10 @@ inspect: build
 
 [group('package')]
 package-check: inspect smoke-wheel smoke-sdist
+
+[group('package')]
+e2e-image image_tag:
+    {{ CONTAINER_RUNTIME }} build --file e2e/Dockerfile --tag "{{ image_tag }}" .
 
 [group('lifecycle')]
 install:

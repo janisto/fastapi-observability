@@ -32,6 +32,33 @@ coupling application code to a cloud logging SDK. The package focuses on
 structured logging and request correlation: it does not create spans, configure
 OpenTelemetry, or ship logs to a backend.
 
+## Why newline-delimited JSON
+
+`JSONFormatter` creates one compact, self-contained JSON object per application
+or access event. A standard-library `logging.StreamHandler` follows it with one
+LF (`\n`), producing newline-delimited JSON (NDJSON, also called JSON Lines).
+Custom handlers must preserve that one-object-per-line framing by appending
+exactly one LF and no non-JSON text. The output is a stream of objects, never a
+JSON array.
+
+NDJSON is deliberate for production logging:
+
+- Agents such as Vector, Fluent Bit, and Datadog can parse entries as a stream
+  with bounded memory instead of waiting for a closing array bracket.
+- Append-only output needs no array brackets, commas, whole-file rewrites, or
+  trailing-comma coordination. Each handler emission submits one complete
+  encoded line; the destination and record size determine OS-level write
+  atomicity.
+- A crash or interrupted final write can damage the incomplete last line, while
+  previously completed lines remain independently parseable.
+- Analytics systems can split large inputs on newline boundaries and process
+  independent records in parallel.
+- Standard tools work directly on the stream, for example
+  `head -n 20 app.log | jq -r '.message'`.
+
+Standard JSON arrays are suited to complete documents; NDJSON retains JSON's
+structured fields while providing framing designed for continuous log streams.
+
 ## Package scope
 
 It uses standard-library `logging` and pure ASGI middleware, with no exporter or
@@ -42,7 +69,7 @@ handlers, and deployment policy.
 > `fastapi_request_observability`. The similarly named
 > `fastapi-observability` distribution is an unrelated project.
 
-## Installation
+## Requirements and installation
 
 ```bash
 uv add fastapi-request-observability
@@ -51,11 +78,11 @@ uv add fastapi-request-observability
 Python 3.13 or newer and FastAPI 0.130.0 or newer are supported. The Python
 compatibility window follows the latest two stable feature releases.
 
-## GCP setup
+## Complete setup
 
 When this documentation shows one configuration, it uses GCP. Complete
 runnable GCP, provider-neutral, AWS, and Azure applications are available in
-[`examples`](examples).
+the public [`examples`](https://github.com/janisto/fastapi-observability/tree/main/examples).
 
 ```python
 import logging
@@ -120,32 +147,68 @@ bits of randomness. The selected value is available from:
 - application and access logs.
 
 The response header, input headers, generator, and validator are configurable
-with `RequestContextConfig`. Generated values are validated too, and an invalid
-custom generator falls back to the package's safe format. Custom validators
-cannot admit empty, non-ASCII, or non-visible values. Accessors return `None`
-outside a request; no background-job context is manufactured.
+with `RequestContextConfig`. A custom generator is called once. Its result is
+validated; an invalid result or exception falls back to the package's safe
+format. Without a custom validator, caller IDs use the same URI-unreserved
+baseline. A custom validator
+may admit broader RFC 9110 field content inside this adapter's ASCII response
+boundary, including punctuation, internal space or tab, and values longer than
+128 characters. Empty values, edge whitespace, other controls, DEL, and
+non-ASCII remain outside this adapter's exact response-header boundary.
+Generated and fallback IDs always retain the package baseline.
+Accessors return `None` outside a request; no background-job context is
+manufactured.
 Invalid or empty configured HTTP header names fail immediately when the config
 object is constructed; use `inject_response_header=False` to disable response
 header injection.
 
-`traceparent` parsing is strict. Invalid, duplicate, uppercase, zero-ID, or
-oversized values are ignored. Version `00` must be exactly 55 characters;
-future versions follow W3C extension framing. `tracestate` fields are combined
-in wire order and retained only when their W3C key/value grammar, unique-key
-rule, 32-member limit, and 512-byte limit are valid. An invalid `tracestate`
-does not invalidate an otherwise valid `traceparent`. When the trace is valid,
-its trace ID is the correlation ID; otherwise the request ID is.
+`traceparent` parsing defaults to the pinned W3C Trace Context Level 1
+Recommendation. Invalid, duplicate, uppercase, zero-ID, or unsafe native field
+values are ignored. Version `00` must be exactly 55 characters; future versions
+follow W3C extension framing, treat every dash-delimited suffix as opaque, and
+have no package-invented length ceiling.
+`tracestate` field-lines are combined in wire order,
+canonicalized by removing HTTP optional whitespace around members, and retained
+only when their selected-level key/value grammar, unique-key rule, and
+32-member limit are valid. The package can propagate at least 512 characters
+and admits valid values beyond that minimum, including the 513-character
+boundary. Empty members are valid and count toward the member limit. An invalid
+`tracestate` does not invalidate an otherwise valid `traceparent`. When the
+trace is valid, its trace ID is the correlation ID; otherwise the request ID is.
+
+Level 2 is an explicit opt-in. Configure the same immutable level on both
+middleware components when both are installed; a mismatch fails the request
+deterministically instead of silently changing the emitted access fields:
+
+```python
+from fastapi_request_observability import (
+    AccessLogConfig,
+    RequestContextConfig,
+    TraceContextLevel,
+)
+
+trace_level = TraceContextLevel.LEVEL_2
+access_config = AccessLogConfig(trace_context_level=trace_level)
+request_context_config = RequestContextConfig(trace_context_level=trace_level)
+```
+
+Values other than `1` or `2` fail configuration immediately. Both levels
+preserve `trace_flags` and derive `trace_sampled` from bit zero. For version
+`00`, Level 2 also emits `trace_id_random` from bit one. Level 1 and unknown
+higher versions deliberately omit that field.
 
 The incoming parent ID is not a span created by this application. No preset
 emits it as a current span ID.
 
-## Log contract
+## Structured log contract
 
 Every JSON record contains `timestamp`, `level` (`severity` on GCP), `logger`,
 and `message`. Set `include_source=True` to add source file, line, and function.
 Exceptions use `stacktrace`. JSON-serializable `extra` values stay structured;
 unsupported values receive a deterministic type marker instead of breaking
-logging.
+logging. Mapping keys are normalized to JSON strings before encoding; if two
+native keys normalize to the same JSON name, the first value is retained so a
+record never contains duplicate raw member names.
 
 The formatter enriches records in the thread and context where formatting
 occurs. Applications using `QueueHandler` should format or copy contextual
@@ -155,43 +218,63 @@ later.
 
 During a request, records also contain `request_id` and `correlation_id`. A
 valid W3C context adds `trace_id`, `parent_id`, `trace_flags`, and
-`trace_sampled`.
+`trace_sampled`; configured Level 2 additionally adds `trace_id_random`.
+
+### Terminal access record
 
 The access record message is `request completed` and includes:
 
 | Field | Meaning |
 | --- | --- |
 | `method` | HTTP method |
-| `path` | Escaped concrete path, without query string |
-| `path_template` | Matched FastAPI route template when available |
+| `path` | Opt-in escaped wire path, without query string; omitted when ASGI exposes decoded-only path data |
+| `path_template` | Matched low-cardinality route template; simple FastAPI placeholders use `{name}` or `{*name}`, while richer authoritative native syntax is preserved |
 | `operation_id` | Only an explicitly configured `APIRoute.operation_id` |
-| `status` | Status sent on the wire |
+| `status` | Status accepted by the downstream ASGI sender, when observed |
 | `duration_ms` | Handling and streaming time in milliseconds |
-| `remote_ip` | `scope["client"][0]`, when present |
-| `user_agent` | Incoming user agent, when present |
-| `error` | Observed exception type and message |
+| `terminal_reason` | Standard reason for abnormal completion; absent after normal completion |
+| `peer_ip` | Opt-in canonical direct IP from `scope["client"][0]`; hostnames and zoned values are omitted |
+| `user_agent` | Opt-in single RFC 9110 field-content value using the lossless Latin-1 mapping of ASGI header bytes |
+| `error` | Opt-in privacy-sensitive exception type and message (`capture_error=True`) |
 
-The default level is `ERROR` for 5xx, `WARNING` for 4xx, and `INFO` otherwise.
-Package and provider fields are reserved: `extra` values and access callbacks
-cannot replace them.
+The default level is `ERROR` for abnormal completion or a normal 5xx,
+`WARNING` for a normal 4xx, and `INFO` otherwise.
+Field ownership is contextual and exact. Application `extra` values cannot
+replace envelope, request-context, or fields owned by the active preset, but
+may use access-only names, exact aliases owned only by an inactive preset, and
+unrelated custom namespaces. Access callbacks
+additionally cannot replace the exact fields written by access enrichment.
 
-`AccessLogConfig` also accepts a monotonic `clock`, a `status_level(status)`
-callback, a synchronous `extra_fields(scope)` callback, and a custom message.
-Callback and logging failures use the default behavior and cannot replace the
-HTTP response. When installed without `RequestContextMiddleware`, access
-middleware creates default request context and adds `X-Request-ID` itself.
+`AccessLogConfig` also accepts independent `capture_path`, `capture_peer_ip`,
+`capture_user_agent`, and `capture_error` booleans, all defaulting to `False`;
+a monotonic `clock`; a `status_level(status)` callback; and a synchronous
+`extra_fields(scope)` callback. The terminal message is fixed to
+`request completed` and is not configurable. Rich errors can contain secrets
+and require an explicit privacy decision. Callback and logging failures use the
+default behavior and cannot replace the HTTP response. When installed without
+`RequestContextMiddleware`, access middleware creates default request context
+and adds `X-Request-ID` itself.
 
-`path_template` is the aggregation key; `path` is useful for individual-request
-diagnostics and has unbounded cardinality. Query strings are omitted because
-they frequently carry secrets and high-cardinality values. Bodies,
-authorization, cookies, and arbitrary headers are never logged.
+`path_template` is the default aggregation key. Opt-in `path` is useful for
+individual-request diagnostics and has unbounded cardinality. Query strings,
+forwarded IPs, bodies, authorization, cookies, and arbitrary headers are never
+logged.
+
+FastAPI whole-segment path converters are normalized: ordinary converters such
+as `{item_id:int}` emit `{item_id}`, while `{path:path}` emits `{*path}`.
+Richer authoritative matched templates are preserved in native syntax rather
+than replaced with request data. Unmatched requests omit route identity.
 
 ## Cloud presets
 
 Pass the same preset to the formatter and access configuration:
 
 ```python
-from fastapi_request_observability import AccessLogConfig, JSONFormatter, LoggingPreset
+from fastapi_request_observability import (
+    AccessLogConfig,
+    JSONFormatter,
+    LoggingPreset,
+)
 
 preset = LoggingPreset.GCP  # or AWS, AZURE, DEFAULT
 handler.setFormatter(JSONFormatter(preset))
@@ -205,7 +288,8 @@ access_config = AccessLogConfig(
   `logging.googleapis.com/trace_sampled`, and a structured `httpRequest` access
   field. `logging.googleapis.com/trace` contains the validated raw W3C trace
   ID and requires no project-ID configuration. The preset never emits a fake
-  `logging.googleapis.com/spanId`.
+  `logging.googleapis.com/spanId`. Its `httpRequest.requestUrl` is the opt-in,
+  query-free path only; scheme and authority are never included.
 - `AWS` adds `xray_trace_id` in `1-8hex-24hex` form. It does not create an X-Ray
   segment.
 - `AZURE` adds `operation_Id` and `operation_ParentId`. It does not start or
@@ -214,15 +298,24 @@ access_config = AccessLogConfig(
 Provider fields correlate logs only. Trace creation and export remain the
 application's responsibility.
 
-## Response and exception behavior
+## Diagnostics and failure boundaries
+
+### Response and exception behavior
 
 The middleware observes exceptions, emits once, and re-raises the original
 exception unchanged. It never synthesizes a replacement 500 response.
 
 - Handled exceptions and validation errors use the emitted status.
-- An exception before `http.response.start` logs status 500.
+- An exception before an accepted `http.response.start` omits status and uses
+  terminal reason `service_error`; no synthetic 500 is logged.
 - Once response headers are sent, that committed status wins even if streaming
-  later fails.
+  later fails; the record uses terminal reason `body_error` and level `ERROR`.
+- An `OSError` raised specifically by the downstream ASGI `send` boundary uses
+  `client_disconnect` and preserves the original exception. An application or
+  body-generator `OSError` remains a service or body failure.
+- Cancellation uses terminal reason `cancelled`. An application that returns
+  without a complete response uses `response_dropped`, with status present only
+  when response start was accepted.
 - Access emission occurs after the final response body event, or after the final
   response-trailers event when trailers were declared, so duration includes
   streaming and trailers but excludes later Starlette background work.
@@ -233,7 +326,8 @@ exception unchanged. It never synthesizes a replacement 500 response.
 With normal `app.add_middleware` installation, Starlette's outer
 `ServerErrorMiddleware` creates the final unhandled 500 after user middleware
 has re-raised. Consequently, the package cannot add `X-Request-ID` to that final
-500 response. The access record still contains the request ID and status 500.
+500 response. The access record still contains the request ID, omits the
+unobserved outer status, and reports `service_error`.
 
 Services that require the header on the final 500 can wrap the completed
 FastAPI application exported to the ASGI server:
@@ -257,27 +351,32 @@ the final 500 response. The trade-off is that the exported `app` is an ASGI
 wrapper rather than the `FastAPI` object; retain `fastapi_app` for application
 configuration and test setup.
 
-## Streaming, concurrency, and non-HTTP scopes
+### Streaming, concurrency, and non-HTTP scopes
 
 All request state is local to a pure ASGI `__call__` and the `ContextVar` token
 is reset in `finally`. Concurrent and sequential requests cannot share package
 context. WebSocket and lifespan scopes pass through unchanged; WebSocket access
 logging is outside the package scope.
 
-## Proxy trust
+### Proxy trust
 
-`remote_ip` comes only from the ASGI scope. The package does not parse
+Opt-in `peer_ip` comes only from the ASGI scope. The package does not parse
 `Forwarded` or `X-Forwarded-For`, because trusting those headers without a known
-proxy boundary allows spoofing. Configure trusted proxy handling in the ASGI
-server or deployment so `scope["client"]` is already normalized.
+proxy boundary allows spoofing. Configure the ASGI server so `scope["client"]`
+represents the intended direct peer boundary.
 
-## Compatibility
+## Compatibility and development
 
 Beginning with v1.0.0, exported APIs, configuration defaults, structured log
 fields, and supported runtime versions are compatibility contracts. Breaking
 changes require a new major version, explicit changelog coverage, and migration
 guidance. The package does not configure logging at import time and does not
 claim ownership of exception responses.
+
+Version 2 configuration and public value objects are keyword-only and expose no
+v1 argument-order or option compatibility shims. Applications upgrading from
+1.x must follow the
+[migration guide](https://github.com/janisto/fastapi-observability/blob/main/CHANGELOG.md#migration-from-1x).
 
 Repository tests use HTTPX2 directly with its asynchronous ASGI transport.
 Deprecated HTTPX and FastAPI/Starlette `TestClient` are intentionally excluded.
@@ -287,7 +386,7 @@ If the package later needs to mock outbound HTTP, use `pytest-httpx2` and its
 See [EXAMPLES.md](https://github.com/janisto/fastapi-observability/blob/main/EXAMPLES.md)
 for complete configurations.
 
-## Development
+### Development
 
 Development uses [uv](https://docs.astral.sh/uv/) and
 [just](https://github.com/casey/just). On macOS, install the workflow linters:
@@ -323,3 +422,49 @@ This intentionally runs outside `just qa`. Use `uv run mutmut results` to
 list surviving mutants and `uv run mutmut show <mutant>` to inspect one. Add a
 test when a survivor exposes a contract gap; equivalent transformations do not
 need production pragmas or artificial assertions.
+
+## Consumer image
+
+Run `just e2e-image observability-e2e-local:manual` to build a
+production-shaped consumer image from the exact checkout. The recipe prefers
+Podman and falls back to Docker.
+
+Building the image verifies packaging and integration only. It does not run the
+image, validate emitted logs, compare implementations, or approve a release.
+Optional independent tooling may exercise the package's documented public
+contract. Any audit result is informational and is never a publication
+requirement.
+
+## References
+
+- [FastAPI middleware](https://fastapi.tiangolo.com/tutorial/middleware/)
+  documents middleware stacking and request/response execution order.
+- [FastAPI advanced middleware](https://fastapi.tiangolo.com/advanced/middleware/)
+  documents pure ASGI middleware and wrapping a completed application.
+- [Starlette middleware](https://www.starlette.io/middleware/) documents the
+  default error-middleware stack and pure ASGI middleware conventions.
+- [ASGI HTTP and WebSocket specification](https://asgi.readthedocs.io/en/latest/specs/www.html)
+  defines HTTP scopes, response-start/body events, disconnects, and send
+  failures used by the middleware boundary.
+- [Python `contextvars`](https://docs.python.org/3/library/contextvars.html)
+  defines task-local context propagation and token-based restoration.
+- [W3C Trace Context Level 1 Recommendation](https://www.w3.org/TR/2021/REC-trace-context-1-20211123/)
+  defines the default `traceparent` and `tracestate` contract.
+- [W3C Trace Context Level 2 Candidate Recommendation Draft](https://www.w3.org/TR/2024/CRD-trace-context-2-20240328/)
+  defines the explicit Level 2 key grammar and random trace-ID flag.
+- [Google Cloud trace and log integration](https://cloud.google.com/trace/docs/trace-log-integration)
+  documents the bare trace ID as the preferred trace field format.
+- [Google Cloud Trace release notes](https://cloud.google.com/trace/docs/release-notes)
+  record when the bare trace ID became the preferred form while the full
+  project resource name remained supported.
+- [Google Cloud structured logging](https://cloud.google.com/logging/docs/structured-logging)
+  documents `severity`, `message`, `httpRequest`, and special trace fields.
+- [AWS X-Ray trace IDs](https://docs.aws.amazon.com/xray/latest/devguide/xray-api-sendingdata.html#xray-api-traceids)
+  document converting a W3C trace ID to `1-8hex-24hex` form.
+- [Azure Application Insights data model](https://learn.microsoft.com/en-us/azure/azure-monitor/app/data-model-complete)
+  defines `operation_Id` as the root-operation identifier and
+  `operation_ParentId` as the immediate-parent identifier.
+
+## License
+
+[MIT](https://github.com/janisto/fastapi-observability/blob/main/LICENSE)

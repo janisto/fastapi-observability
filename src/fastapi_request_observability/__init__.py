@@ -10,7 +10,7 @@ from ._context import (
 from .access import AccessLogConfig, AccessLogMiddleware
 from .logging import JSONFormatter, LoggingPreset
 from .middleware import RequestContextConfig, RequestContextMiddleware
-from .trace import TraceContext, parse_traceparent
+from .trace import TraceContext, TraceContextLevel, parse_traceparent, resolve_trace_context_level
 
 __all__ = [
     "AccessLogConfig",
@@ -21,9 +21,11 @@ __all__ = [
     "RequestContextConfig",
     "RequestContextMiddleware",
     "TraceContext",
+    "TraceContextLevel",
     "correlation_id",
     "current_request_context",
     "parse_traceparent",
     "request_id",
+    "resolve_trace_context_level",
     "trace_context",
 ]

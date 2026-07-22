@@ -18,6 +18,7 @@ root_logger.handlers.clear()
 root_logger.addHandler(handler)
 root_logger.setLevel(logging.INFO)
 
+
 app = FastAPI()
 app.add_middleware(
     AccessLogMiddleware,

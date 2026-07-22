@@ -2,7 +2,13 @@ import asyncio
 
 import pytest
 
-from fastapi_request_observability import correlation_id, current_request_context, request_id, trace_context
+from fastapi_request_observability import (
+    TraceContextLevel,
+    correlation_id,
+    current_request_context,
+    request_id,
+    trace_context,
+)
 from fastapi_request_observability._context import (
     _bind_context,
     _build_context,
@@ -54,6 +60,21 @@ def test_context_builds_trace_correlation_and_tracestate():
     assert context.trace_context.tracestate == "one=1,two=2"
 
 
+def test_context_builds_explicit_level_2_trace_projection():
+    context = _build_context(
+        [(b"traceparent", TRACEPARENT[:-2] + b"03")],
+        request_id_header="X-Request-ID",
+        traceparent_header="traceparent",
+        tracestate_header="tracestate",
+        generator=lambda: "generated",
+        validator=_default_validate_request_id,
+        trace_context_level=TraceContextLevel.LEVEL_2,
+    )
+    assert context.trace_context is not None
+    assert context.trace_context.trace_context_level is TraceContextLevel.LEVEL_2
+    assert context.trace_context.trace_id_random is True
+
+
 @pytest.mark.parametrize(
     "headers",
     [
@@ -87,7 +108,7 @@ def test_duplicate_traceparent_is_invalid():
     assert context.correlation_id == "request-2"
 
 
-def test_invalid_generator_is_retried_then_safe_fallback_is_used():
+def test_invalid_generator_is_called_once_then_safe_fallback_is_used():
     calls = 0
 
     def invalid_generator():
@@ -95,39 +116,33 @@ def test_invalid_generator_is_retried_then_safe_fallback_is_used():
         calls += 1
         return "invalid value"
 
-    generated = _new_valid_request_id(invalid_generator, _default_validate_request_id)
-    assert calls == 2
+    generated = _new_valid_request_id(invalid_generator)
+    assert calls == 1
     _assert_default_generated_request_id(generated)
 
 
-def test_validator_rejecting_every_candidate_uses_safe_fallback():
-    generated = _new_valid_request_id(lambda: "rejected", lambda _value: False)
+def test_custom_validator_rejects_only_caller_input_not_generated_candidates():
+    context = _build_context(
+        [(b"x-request-id", b"caller")],
+        request_id_header="X-Request-ID",
+        traceparent_header="traceparent",
+        tracestate_header="tracestate",
+        generator=lambda: "generated",
+        validator=lambda _value: False,
+    )
 
-    assert generated != "rejected"
-    _assert_default_generated_request_id(generated)
-
-
-def test_generator_exception_is_retried_before_falling_back():
-    attempts = iter([RuntimeError("temporary failure"), "recovered"])
-
-    def flaky_generator():
-        result = next(attempts)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    assert _new_valid_request_id(flaky_generator, _default_validate_request_id) == "recovered"
+    assert context.request_id == "generated"
 
 
 def test_custom_generator_exception_uses_fallback():
     def broken_generator():
         raise RuntimeError("broken")
 
-    _assert_default_generated_request_id(_new_valid_request_id(broken_generator, _default_validate_request_id))
+    _assert_default_generated_request_id(_new_valid_request_id(broken_generator))
 
 
 @pytest.mark.parametrize("candidate", [None, 42, b"bytes"])
-def test_non_string_generator_results_are_retried_then_replaced(candidate):
+def test_non_string_generator_results_are_called_once_then_replaced(candidate):
     calls = 0
 
     def generator():
@@ -135,9 +150,9 @@ def test_non_string_generator_results_are_retried_then_replaced(candidate):
         calls += 1
         return candidate
 
-    generated = _new_valid_request_id(generator, _default_validate_request_id)
+    generated = _new_valid_request_id(generator)
 
-    assert calls == 2
+    assert calls == 1
     _assert_default_generated_request_id(generated)
 
 
@@ -156,26 +171,33 @@ def test_entropy_failure_uses_unique_safe_emergency_ids(monkeypatch):
     _assert_default_generated_request_id(second)
 
 
-def test_validator_exception_uses_safe_fallback():
+def test_validator_exception_rejects_caller_and_uses_configured_generator():
     def broken_validator(_value):
         raise RuntimeError("validator failed")
 
-    generated = _new_valid_request_id(lambda: "candidate", broken_validator)
+    context = _build_context(
+        [(b"x-request-id", b"caller")],
+        request_id_header="X-Request-ID",
+        traceparent_header="traceparent",
+        tracestate_header="tracestate",
+        generator=lambda: "generated",
+        validator=broken_validator,
+    )
 
-    _assert_default_generated_request_id(generated)
+    assert context.request_id == "generated"
 
 
 def test_invalid_package_fallback_is_replaced_by_last_resort_safe_id(monkeypatch):
     monkeypatch.setattr("fastapi_request_observability._context._default_request_id", lambda: "bad value")
 
-    generated = _new_valid_request_id(lambda: "also invalid", _default_validate_request_id)
+    generated = _new_valid_request_id(lambda: "also invalid")
 
     assert generated not in {"bad value", "also invalid"}
     _assert_default_generated_request_id(generated)
 
 
 @pytest.mark.parametrize("value", ["", " ", "\x7f", "é"])
-def test_custom_validator_cannot_admit_empty_or_unsafe_header_values(value):
+def test_custom_validator_cannot_admit_values_outside_the_native_header_boundary(value):
     context = _build_context(
         [(b"x-request-id", value.encode("latin-1"))],
         request_id_header="X-Request-ID",
@@ -187,8 +209,43 @@ def test_custom_validator_cannot_admit_empty_or_unsafe_header_values(value):
     assert context.request_id == "safe-id"
 
 
-@pytest.mark.parametrize("value", ["!", "~"])
-def test_custom_validator_can_admit_visible_ascii_boundaries(value):
+@pytest.mark.parametrize("value", ["!", "id:42", "x" * 129, "tenant request", "tenant\trequest", "tenant,request"])
+def test_custom_validator_can_broaden_rfc_field_content_inside_asgi_ascii_boundary(value):
+    context = _build_context(
+        [(b"x-request-id", value.encode("ascii"))],
+        request_id_header="X-Request-ID",
+        traceparent_header="traceparent",
+        tracestate_header="tracestate",
+        generator=lambda: "safe-id",
+        validator=lambda _value: True,
+    )
+    assert context.request_id == value
+
+
+@pytest.mark.parametrize("value", [" tenant", "tenant ", "\ttenant", "tenant\t"])
+def test_custom_validator_cannot_admit_edge_whitespace(value):
+    calls = 0
+
+    def validator(_value):
+        nonlocal calls
+        calls += 1
+        return True
+
+    context = _build_context(
+        [(b"x-request-id", value.encode("ascii"))],
+        request_id_header="X-Request-ID",
+        traceparent_header="traceparent",
+        tracestate_header="tracestate",
+        generator=lambda: "safe-id",
+        validator=validator,
+    )
+
+    assert context.request_id == "safe-id"
+    assert calls == 0
+
+
+@pytest.mark.parametrize("value", ["A", "~"])
+def test_custom_validator_can_admit_baseline_boundaries(value):
     context = _build_context(
         [(b"x-request-id", value.encode())],
         request_id_header="X-Request-ID",

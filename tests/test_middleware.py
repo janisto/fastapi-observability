@@ -9,6 +9,7 @@ from fastapi_request_observability import (
     RequestContext,
     RequestContextConfig,
     RequestContextMiddleware,
+    TraceContextLevel,
     correlation_id,
     current_request_context,
     request_id,
@@ -20,6 +21,47 @@ from tests._client import asgi_client
 TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 OTHER_TRACEPARENT = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-00"
 DEFAULT_GENERATED_REQUEST_ID = re.compile(r"[A-Za-z0-9._~-]{32}")
+
+
+def test_request_context_config_resolves_trace_level_and_rejects_unsupported_values():
+    assert RequestContextConfig().trace_context_level is TraceContextLevel.LEVEL_1
+    assert RequestContextConfig(trace_context_level=2).trace_context_level is TraceContextLevel.LEVEL_2
+    with pytest.raises(ValueError, match="unsupported trace context level"):
+        RequestContextConfig(trace_context_level=3)
+
+
+def test_request_context_config_rejects_the_removed_v1_positional_layout():
+    def generator():
+        return "generated"
+
+    def validator(value):
+        return value == "allowed"
+
+    with pytest.raises(TypeError, match="takes 1 positional argument"):
+        RequestContextConfig(
+            "X-Correlation-ID",  # ty: ignore[too-many-positional-arguments]
+            "X-Response-ID",
+            "x-traceparent",
+            "x-tracestate",
+            generator,
+            validator,
+            False,  # noqa: FBT003 - deliberate v1 call-shape rejection
+        )
+
+    config = RequestContextConfig(
+        request_id_header="X-Correlation-ID",
+        response_header="X-Response-ID",
+        traceparent_header="x-traceparent",
+        tracestate_header="x-tracestate",
+        request_id_generator=generator,
+        request_id_validator=validator,
+        inject_response_header=False,
+    )
+    assert config.request_id_header == "X-Correlation-ID"
+    assert config.response_header == "X-Response-ID"
+    assert config.request_id_generator is generator
+    assert config.request_id_validator is validator
+    assert config.inject_response_header is False
 
 
 async def test_fastapi_request_context_state_header_and_accessors():
@@ -103,6 +145,29 @@ async def test_trace_accessors_expose_validated_context_only_during_request():
     }
     assert trace_context() is None
     assert current_request_context() is None
+
+
+async def test_explicit_level_2_exposes_random_flag_during_request():
+    app = FastAPI()
+    app.add_middleware(
+        RequestContextMiddleware,
+        config=RequestContextConfig(trace_context_level=TraceContextLevel.LEVEL_2),
+    )
+
+    @app.get("/")
+    async def root():
+        trace = trace_context()
+        assert trace is not None
+        return {
+            "trace_context_level": trace.trace_context_level,
+            "trace_sampled": trace.sampled,
+            "trace_id_random": trace.trace_id_random,
+        }
+
+    async with asgi_client(app) as client:
+        response = await client.get("/", headers={"traceparent": TRACEPARENT[:-2] + "03"})
+
+    assert response.json() == {"trace_context_level": 2, "trace_sampled": True, "trace_id_random": True}
 
 
 async def test_custom_trace_headers_override_standard_header_names():
@@ -292,7 +357,7 @@ async def test_nested_asgi_request_gets_independent_context_and_restores_parent(
 
 @pytest.mark.asyncio
 async def test_existing_scope_context_is_reused_without_rebuilding_or_replacing_it():
-    upstream = RequestContext("upstream-request", "upstream-correlation")
+    upstream = RequestContext(request_id="upstream-request", correlation_id="upstream-correlation")
     observed = None
     sent = []
 
@@ -321,7 +386,7 @@ async def test_existing_scope_context_is_reused_without_rebuilding_or_replacing_
 
 @pytest.mark.asyncio
 async def test_cleanup_preserves_scope_context_replaced_by_downstream_app():
-    replacement = RequestContext("downstream-request", "downstream-correlation")
+    replacement = RequestContext(request_id="downstream-request", correlation_id="downstream-correlation")
 
     async def app(scope, _receive, send):
         assert request_id() == "incoming-request"

@@ -12,23 +12,23 @@ from dataclasses import dataclass
 from itertools import count
 from threading import Lock
 
-from .trace import TraceContext, _with_tracestate, parse_traceparent
+from .trace import TraceContext, TraceContextLevel, _with_tracestate, parse_traceparent, resolve_trace_context_level
 
 RequestIDGenerator = Callable[[], str]
 RequestIDValidator = Callable[[str], bool]
 Header = tuple[bytes, bytes]
 _MAX_REQUEST_ID_LENGTH = 128
-_VISIBLE_ASCII_START = 0x21
-_VISIBLE_ASCII_END = 0x7E
+_VISIBLE_ASCII_END = ord("~")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class RequestContext:
     """Validated correlation metadata for the current HTTP request."""
 
     request_id: str
     correlation_id: str
     trace_context: TraceContext | None = None
+    trace_context_level: TraceContextLevel = TraceContextLevel.LEVEL_1
 
 
 _request_context: ContextVar[RequestContext | None] = ContextVar(
@@ -82,14 +82,13 @@ def _default_validate_request_id(value: str) -> bool:
     return all(character.isalnum() or character in "-._~" for character in value)
 
 
-def _new_valid_request_id(generator: RequestIDGenerator, validator: RequestIDValidator) -> str:
-    for _ in range(2):
-        try:
-            candidate = generator()
-        except Exception:  # noqa: BLE001, S112 - application callback failures must not break requests
-            continue
-        if isinstance(candidate, str) and _is_valid(validator, candidate):
-            return candidate
+def _new_valid_request_id(generator: RequestIDGenerator) -> str:
+    try:
+        candidate = generator()
+    except Exception:  # noqa: BLE001 - application callback failures must not break requests
+        candidate = None
+    if isinstance(candidate, str) and _default_validate_request_id(candidate):
+        return candidate
 
     fallback = _default_request_id()
     # A custom validator may reject every safe value. The final value must
@@ -101,7 +100,9 @@ def _is_valid(validator: RequestIDValidator, value: str) -> bool:
     if (
         not value
         or not value.isascii()
-        or any(not _VISIBLE_ASCII_START <= ord(character) <= _VISIBLE_ASCII_END for character in value)
+        or value[0] in " \t"
+        or value[-1] in " \t"
+        or any(character != "\t" and not " " <= character <= chr(_VISIBLE_ASCII_END) for character in value)
     ):
         return False
     try:
@@ -122,7 +123,7 @@ def _header_values(headers: Sequence[Header], name: str) -> list[str]:
     return [value.decode("latin-1") for key, value in headers if key.lower() == encoded_name]
 
 
-def _build_context(
+def _build_context(  # noqa: PLR0913 - explicit extraction inputs keep framework integration auditable
     headers: Sequence[Header],
     *,
     request_id_header: str,
@@ -130,17 +131,19 @@ def _build_context(
     tracestate_header: str,
     generator: RequestIDGenerator,
     validator: RequestIDValidator,
+    trace_context_level: TraceContextLevel | int = TraceContextLevel.LEVEL_1,
 ) -> RequestContext:
+    resolved_trace_context_level = resolve_trace_context_level(trace_context_level)
     request_id_values = _header_values(headers, request_id_header)
     incoming_request_id = request_id_values[0] if len(request_id_values) == 1 else ""
     selected_request_id = (
-        incoming_request_id
-        if _is_valid(validator, incoming_request_id)
-        else _new_valid_request_id(generator, validator)
+        incoming_request_id if _is_valid(validator, incoming_request_id) else _new_valid_request_id(generator)
     )
 
     traceparent_values = _header_values(headers, traceparent_header)
-    trace = parse_traceparent(traceparent_values[0]) if len(traceparent_values) == 1 else None
+    trace = (
+        parse_traceparent(traceparent_values[0], resolved_trace_context_level) if len(traceparent_values) == 1 else None
+    )
     if trace is not None:
         trace = _with_tracestate(trace, _header_values(headers, tracestate_header))
 
@@ -148,4 +151,5 @@ def _build_context(
         request_id=selected_request_id,
         correlation_id=trace.trace_id if trace else selected_request_id,
         trace_context=trace,
+        trace_context_level=resolved_trace_context_level,
     )

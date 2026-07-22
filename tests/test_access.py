@@ -1,13 +1,15 @@
 import asyncio
+import io
 import json
 import logging
 from collections.abc import Mapping
 from types import SimpleNamespace
-from typing import override
+from typing import Any, override
 
 import pytest
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
+from fastapi.routing import APIRoute
 
 from fastapi_request_observability import (
     AccessLogConfig,
@@ -16,11 +18,18 @@ from fastapi_request_observability import (
     LoggingPreset,
     RequestContextConfig,
     RequestContextMiddleware,
+    TraceContextLevel,
     parse_traceparent,
     request_id,
 )
 from fastapi_request_observability._context import RequestContext, _bind_context, _reset_context
-from fastapi_request_observability.access import _protobuf_duration, _request_path, _request_url
+from fastapi_request_observability.access import (
+    _canonical_route_template,
+    _duration_ms,
+    _protobuf_duration,
+    _request_path,
+    _route_fields,
+)
 from fastapi_request_observability.middleware import _SCOPE_CONTEXT_KEY
 from tests._client import asgi_client
 
@@ -28,7 +37,6 @@ TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 RESERVED_CALLBACK_FIELDS = {
     "timestamp",
     "level",
-    "severity",
     "logger",
     "message",
     "stacktrace",
@@ -38,22 +46,17 @@ RESERVED_CALLBACK_FIELDS = {
     "parent_id",
     "trace_flags",
     "trace_sampled",
-    "logging.googleapis.com/trace",
-    "logging.googleapis.com/trace_sampled",
-    "logging.googleapis.com/spanId",
-    "xray_trace_id",
-    "operation_Id",
-    "operation_ParentId",
+    "trace_id_random",
     "method",
     "path",
     "path_template",
     "operation_id",
     "status",
     "duration_ms",
-    "remote_ip",
+    "terminal_reason",
+    "peer_ip",
     "user_agent",
     "error",
-    "httpRequest",
     "source",
 }
 
@@ -78,6 +81,15 @@ class FailingHandler(logging.Handler):
 class FailingStream:
     def write(self, _value):
         raise OSError("diagnostic sink failed")
+
+
+class CountingFailingStream:
+    def __init__(self):
+        self.calls = 0
+
+    def write(self, _value):
+        self.calls += 1
+        raise OSError("writer failed")
 
 
 class PartiallyFailingFields(Mapping[str, str]):
@@ -129,19 +141,25 @@ def _app(
     extra_fields=None,
     clock=None,
     status_level=None,
-    message="request completed",
+    capture_error=False,
 ):
     app = FastAPI()
     config = AccessLogConfig(
         logger=_logger(handler),
         preset=preset,
+        capture_path=True,
+        capture_peer_ip=True,
+        capture_user_agent=True,
+        capture_error=capture_error,
         extra_fields=extra_fields,
         clock=clock or __import__("time").perf_counter,
         status_level=status_level,
-        message=message,
     )
     app.add_middleware(AccessLogMiddleware, config=config)
-    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(
+        RequestContextMiddleware,
+        config=RequestContextConfig(),
+    )
 
     @app.get("/items/{item_id}", operation_id="get_item")
     async def item(item_id: str, request: Request):
@@ -199,6 +217,131 @@ def _app(
     return app
 
 
+async def test_extension_method_case_is_preserved_through_fastapi_and_writer():
+    handler = JSONCaptureHandler()
+    sent = []
+
+    async def capture(message):
+        sent.append(message.copy())
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "m-SEARCH",
+        "scheme": "http",
+        "path": "/items/1",
+        "raw_path": b"/items/1",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "state": {},
+    }
+    await _app(handler)(scope, _empty_receive, capture)
+
+    assert sent[0]["status"] == 405
+    assert handler.entries[0]["method"] == "m-SEARCH"
+
+
+async def test_filtered_access_record_does_not_run_optional_enrichment():
+    handler = JSONCaptureHandler()
+    calls = 0
+
+    def extra_fields(_scope):
+        nonlocal calls
+        calls += 1
+        return {"unexpected": True}
+
+    app = _app(handler, extra_fields=extra_fields)
+    logging.getLogger(f"test.access.{id(handler)}").setLevel(logging.WARNING)
+    async with asgi_client(app) as client:
+        response = await client.get("/items/1")
+
+    assert response.status_code == 200
+    assert calls == 0
+    assert handler.entries == []
+
+
+def test_access_config_validates_trace_and_privacy_options():
+    assert AccessLogConfig().trace_context_level is TraceContextLevel.LEVEL_1
+    assert AccessLogConfig(trace_context_level=2).trace_context_level is TraceContextLevel.LEVEL_2
+    invalid: Any = 1
+    for name in ("capture_path", "capture_peer_ip", "capture_user_agent", "capture_error"):
+        kwargs: Any = {name: invalid}
+        with pytest.raises(TypeError, match=rf"{name} must be a boolean"):
+            AccessLogConfig(**kwargs)
+    with pytest.raises(TypeError, match="clock must be callable"):
+        AccessLogConfig(clock=invalid)
+    with pytest.raises(TypeError, match="unexpected keyword argument 'message'"):
+        AccessLogConfig(message="request completed")  # ty: ignore[unknown-argument]
+    with pytest.raises(ValueError, match="unsupported trace context level"):
+        AccessLogConfig(trace_context_level=3)
+
+
+def test_access_config_rejects_the_removed_v1_positional_layout():
+    logger = logging.getLogger("positional-access-config")
+
+    def clock():
+        return 1.0
+
+    def status_level(_status):
+        return logging.INFO
+
+    def extra_fields(_scope):
+        return {"tenant": "one"}
+
+    with pytest.raises(TypeError, match="takes 1 positional argument"):
+        AccessLogConfig(
+            logger,  # ty: ignore[too-many-positional-arguments]
+            LoggingPreset.DEFAULT,
+            clock,
+            status_level,
+            extra_fields,
+        )
+
+    config = AccessLogConfig(
+        logger=logger,
+        clock=clock,
+        status_level=status_level,
+        extra_fields=extra_fields,
+    )
+    assert (config.logger, config.clock, config.status_level, config.extra_fields) == (
+        logger,
+        clock,
+        status_level,
+        extra_fields,
+    )
+
+
+@pytest.mark.parametrize(
+    ("request_level", "access_level"),
+    [
+        (TraceContextLevel.LEVEL_1, TraceContextLevel.LEVEL_2),
+        (TraceContextLevel.LEVEL_2, TraceContextLevel.LEVEL_1),
+    ],
+)
+@pytest.mark.parametrize("request_context_outermost", [False, True])
+async def test_composed_middleware_rejects_trace_level_mismatch_in_either_order(
+    request_level, access_level, request_context_outermost
+):
+    app = FastAPI()
+    access = (AccessLogMiddleware, AccessLogConfig(trace_context_level=access_level))
+    request = (RequestContextMiddleware, RequestContextConfig(trace_context_level=request_level))
+    inner, outer = (access, request) if request_context_outermost else (request, access)
+    app.add_middleware(inner[0], config=inner[1])
+    app.add_middleware(outer[0], config=outer[1])
+
+    @app.get("/")
+    async def root():
+        return {"ok": True}
+
+    with pytest.raises(RuntimeError, match="trace_context_level mismatch"):
+        async with asgi_client(app) as client:
+            await client.get("/", headers={"traceparent": TRACEPARENT})
+
+
 def _background_failure():
     raise RuntimeError("background failed")
 
@@ -229,7 +372,7 @@ async def test_access_status_matrix(method, path, status, level):
     assert handler.entries[0]["level"] == level
 
 
-async def test_route_query_operation_remote_and_context_fields():
+async def test_route_query_operation_peer_and_context_fields():
     handler = JSONCaptureHandler()
     async with asgi_client(_app(handler), client=("203.0.113.4", 5000)) as client:
         response = await client.get(
@@ -244,11 +387,145 @@ async def test_route_query_operation_remote_and_context_fields():
     assert "secret" not in entry["path"]
     assert entry["path_template"] == "/items/{item_id}"
     assert entry["operation_id"] == "get_item"
-    assert entry["remote_ip"] == "203.0.113.4"
+    assert entry["peer_ip"] == "203.0.113.4"
     assert entry["user_agent"] == "test-agent"
     assert entry["request_id"] == "request-1"
     assert entry["correlation_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert entry["duration_ms"] >= 0
+
+
+@pytest.mark.parametrize(
+    ("native", "expected"),
+    [
+        ("/health", "/health"),
+        ("/items/{item_id}", "/items/{item_id}"),
+        (f"/items/{{{'a' * 65}}}", f"/items/{{{'a' * 65}}}"),
+        ("/items/{item_id:int}", "/items/{item_id}"),
+        ("/reports/report-{year:int}.csv", "/reports/report-{year:int}.csv"),
+        ("/compare/{left:int}-to-{right:int}", "/compare/{left:int}-to-{right:int}"),
+        ("/files/{path:path}", "/files/{*path}"),
+        ("/files/{path:path}/suffix", "/files/{path:path}/suffix"),
+        ("*", "*"),
+    ],
+)
+def test_route_template_canonicalizes_current_fastapi_forms(native, expected):
+    assert _canonical_route_template(native) == expected
+
+
+def test_hostile_route_metadata_is_omitted_without_escaping(capsys):
+    class HostileRoute:
+        @property
+        def path(self):
+            raise RuntimeError("private route metadata")
+
+    scope: Any = {"route": HostileRoute()}
+    assert _route_fields(scope) == {}
+    diagnostic = capsys.readouterr().err
+    assert "access route metadata failed: RuntimeError" in diagnostic
+    assert "private route metadata" not in diagnostic
+
+
+def test_fastapi_route_language_requires_distinct_omitted_and_present_route_identities():
+    app = FastAPI()
+
+    async def endpoint():
+        return {"ok": True}
+
+    app.add_api_route("/items", endpoint, methods=["GET"])
+    app.add_api_route("/items/{item_id}", endpoint, methods=["GET"])
+    app.add_api_route("/optional/{item_id?}", endpoint, methods=["GET"])
+
+    routes = {route.path: route for route in app.routes if isinstance(route, APIRoute)}
+    assert routes["/items"].path_regex.fullmatch("/items") is not None
+    assert routes["/items/{item_id}"].path_regex.fullmatch("/items/value") is not None
+
+    optional_marker = routes["/optional/{item_id?}"]
+    assert optional_marker.param_convertors == {}
+    assert optional_marker.path_regex.fullmatch("/optional") is None
+    assert optional_marker.path_regex.fullmatch("/optional/value") is None
+    assert optional_marker.path_regex.fullmatch("/optional/{item_id?}") is not None
+
+
+async def test_representative_route_identity_has_stable_cardinality():
+    handler = JSONCaptureHandler()
+    app = FastAPI()
+    app.add_middleware(AccessLogMiddleware, config=AccessLogConfig(logger=_logger(handler)))
+    app.add_middleware(RequestContextMiddleware)
+
+    @app.get("/items/{item_id}", operation_id="get_item")
+    async def items(item_id: str):
+        return {"item_id": item_id}
+
+    @app.get("/files/{path:path}", operation_id="get_file")
+    async def files(path: str):
+        return {"path": path}
+
+    long_name = "a" * 65
+
+    async def long_route(request: Request):
+        return {"value": request.path_params[long_name]}
+
+    app.add_api_route(f"/long/{{{long_name}}}", long_route, methods=["GET"], operation_id="get_long")
+
+    @app.get("/reports/report-{year:int}.csv", operation_id="get_report")
+    async def report(year: int):
+        return {"year": year}
+
+    @app.get("/compare/{left:int}-to-{right:int}", operation_id="compare_reports")
+    async def compare(left: int, right: int):
+        return {"left": left, "right": right}
+
+    async with asgi_client(app) as client:
+        assert (await client.get("/items/tenant-a")).status_code == 200
+        assert (await client.get("/items/tenant-b")).status_code == 200
+        assert (await client.get("/long/value")).status_code == 200
+        assert (await client.get("/reports/report-2026.csv")).status_code == 200
+        assert (await client.get("/compare/2025-to-2026")).status_code == 200
+        assert (await client.get("/files/tenant-a/one")).status_code == 200
+        assert (await client.get("/files/tenant-b/two")).status_code == 200
+
+    assert [(entry.get("path_template"), entry["operation_id"]) for entry in handler.entries] == [
+        ("/items/{item_id}", "get_item"),
+        ("/items/{item_id}", "get_item"),
+        (f"/long/{{{long_name}}}", "get_long"),
+        ("/reports/report-{year:int}.csv", "get_report"),
+        ("/compare/{left:int}-to-{right:int}", "compare_reports"),
+        ("/files/{*path}", "get_file"),
+        ("/files/{*path}", "get_file"),
+    ]
+
+
+async def test_composite_route_without_explicit_operation_id_keeps_native_identity():
+    handler = JSONCaptureHandler()
+    app = FastAPI()
+    app.add_middleware(AccessLogMiddleware, config=AccessLogConfig(logger=_logger(handler)))
+    app.add_middleware(RequestContextMiddleware)
+
+    @app.get("/reports/report-{year:int}.csv")
+    async def report(year: int):
+        return {"year": year}
+
+    async with asgi_client(app) as client:
+        assert (await client.get("/reports/report-2026.csv")).status_code == 200
+
+    assert handler.entries[0]["path_template"] == "/reports/report-{year:int}.csv"
+    assert "operation_id" not in handler.entries[0]
+
+
+async def test_operation_id_with_control_character_is_preserved_as_json_data():
+    handler = JSONCaptureHandler()
+    app = FastAPI()
+    app.add_middleware(AccessLogMiddleware, config=AccessLogConfig(logger=_logger(handler)))
+    app.add_middleware(RequestContextMiddleware)
+
+    @app.get("/control", operation_id="get_control\nforged")
+    async def control():
+        return {"ok": True}
+
+    async with asgi_client(app) as client:
+        assert (await client.get("/control")).status_code == 200
+
+    assert handler.entries[0]["operation_id"] == "get_control\nforged"
 
 
 async def test_application_and_access_records_share_correlation_fields():
@@ -270,15 +547,6 @@ async def test_application_and_access_records_share_correlation_fields():
     for entry in handler.entries:
         assert entry["request_id"] == "shared"
         assert entry["correlation_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
-
-
-async def test_custom_access_message_replaces_default_message_once():
-    handler = JSONCaptureHandler()
-    async with asgi_client(_app(handler, message="http request finished")) as client:
-        response = await client.get("/items/one")
-
-    assert response.status_code == 200
-    assert [entry["message"] for entry in handler.entries] == ["http request finished"]
 
 
 async def test_access_middleware_reuses_custom_request_context_instead_of_rebuilding_defaults():
@@ -330,15 +598,27 @@ async def test_405_retains_matched_route_template():
     assert handler.entries[0]["path_template"] == "/items/{item_id}"
 
 
-async def test_unhandled_exception_logs_500_once_and_standard_middleware_cannot_header_outer_500():
-    handler = JSONCaptureHandler()
-    async with asgi_client(_app(handler), raise_app_exceptions=False) as client:
+@pytest.mark.parametrize("preset", [LoggingPreset.DEFAULT, LoggingPreset.GCP])
+async def test_unhandled_exception_omits_unobserved_outer_500_and_logs_service_error_once(preset):
+    handler = JSONCaptureHandler(preset)
+    async with asgi_client(_app(handler, preset=preset), raise_app_exceptions=False) as client:
         response = await client.get("/unhandled")
     assert response.status_code == 500
     assert "X-Request-ID" not in response.headers
     assert len(handler.entries) == 1
-    assert handler.entries[0]["status"] == 500
-    assert handler.entries[0]["level"] == "ERROR"
+    assert "status" not in handler.entries[0]
+    assert handler.entries[0]["terminal_reason"] == "service_error"
+    severity_field = "severity" if preset is LoggingPreset.GCP else "level"
+    assert handler.entries[0][severity_field] == "ERROR"
+    assert "error" not in handler.entries[0]
+
+
+async def test_rich_error_summary_requires_explicit_opt_in():
+    handler = JSONCaptureHandler()
+    async with asgi_client(_app(handler, capture_error=True), raise_app_exceptions=False) as client:
+        response = await client.get("/unhandled")
+
+    assert response.status_code == 500
     assert handler.entries[0]["error"] == "RuntimeError: boom"
 
 
@@ -369,7 +649,9 @@ async def test_committed_stream_status_is_preserved_and_logged_once():
     assert response.status_code == 200
     assert len(handler.entries) == 1
     assert handler.entries[0]["status"] == 200
-    assert handler.entries[0]["error"] == "RuntimeError: stream failed"
+    assert handler.entries[0]["terminal_reason"] == "body_error"
+    assert handler.entries[0]["level"] == "ERROR"
+    assert "error" not in handler.entries[0]
 
 
 async def test_streaming_success_preserves_body_and_logs_once():
@@ -516,9 +798,44 @@ async def test_final_response_trailer_send_failure_is_logged_with_committed_stat
     assert raised.value is error
     assert len(handler.entries) == 1
     assert handler.entries[0]["status"] == 206
-    assert handler.entries[0]["level"] == "INFO"
-    assert handler.entries[0]["error"] == "OSError: client disconnected before trailers"
+    assert handler.entries[0]["terminal_reason"] == "client_disconnect"
+    assert handler.entries[0]["level"] == "ERROR"
+    assert "error" not in handler.entries[0]
     assert request_id() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure_type", "expected_status"),
+    [("http.response.start", None), ("http.response.body", 202)],
+)
+async def test_downstream_send_oserror_is_a_client_disconnect_at_each_response_boundary(failure_type, expected_status):
+    handler = JSONCaptureHandler()
+    error = BrokenPipeError("peer closed")
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 202, "headers": []})
+        await send({"type": "http.response.body", "body": b"accepted"})
+
+    async def disconnected_send(message):
+        if message["type"] == failure_type:
+            raise error
+
+    scope = {"type": "http", "method": "POST", "path": "/", "headers": [], "state": {}}
+    with pytest.raises(BrokenPipeError, match=r"^peer closed$") as raised:
+        await AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler)))(
+            scope, _empty_receive, disconnected_send
+        )
+
+    assert raised.value is error
+    assert len(handler.entries) == 1
+    assert handler.entries[0]["terminal_reason"] == "client_disconnect"
+    assert handler.entries[0]["level"] == "ERROR"
+    assert "error" not in handler.entries[0]
+    if expected_status is None:
+        assert "status" not in handler.entries[0]
+    else:
+        assert handler.entries[0]["status"] == expected_status
 
 
 async def test_background_failure_does_not_emit_second_record_or_change_completed_record():
@@ -599,7 +916,7 @@ async def test_concurrent_access_records_keep_request_context_and_status_isolate
         observed[f"{path}:after"] = request_id()
         await send({"type": "http.response.body", "body": path.encode()})
 
-    middleware = AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler)))
+    middleware = AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler), capture_path=True))
 
     async def invoke(path, incoming_request_id):
         sent = []
@@ -662,7 +979,9 @@ async def test_deferred_access_record_cannot_be_overwritten_by_another_request_c
 
     other_trace = parse_traceparent("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-00")
     assert other_trace is not None
-    token = _bind_context(RequestContext("other", other_trace.trace_id, other_trace))
+    token = _bind_context(
+        RequestContext(request_id="other", correlation_id=other_trace.trace_id, trace_context=other_trace)
+    )
     try:
         entry = json.loads(JSONFormatter().format(handler.records[0]))
     finally:
@@ -676,7 +995,7 @@ async def test_deferred_access_record_cannot_be_overwritten_by_another_request_c
 
 
 @pytest.mark.asyncio
-async def test_response_start_send_failure_is_logged_as_uncommitted_500():
+async def test_response_start_send_failure_omits_uncommitted_status():
     handler = JSONCaptureHandler()
 
     async def app(_scope, _receive, send):
@@ -688,8 +1007,10 @@ async def test_response_start_send_failure_is_logged_as_uncommitted_500():
     scope = {"type": "http", "method": "GET", "path": "/", "headers": [], "state": {}}
     with pytest.raises(RuntimeError, match="send failed"):
         await AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler)))(scope, _empty_receive, failing_send)
-    assert handler.entries[0]["status"] == 500
-    assert handler.entries[0]["error"] == "RuntimeError: send failed"
+    assert "status" not in handler.entries[0]
+    assert handler.entries[0]["terminal_reason"] == "service_error"
+    assert handler.entries[0]["level"] == "ERROR"
+    assert "error" not in handler.entries[0]
 
 
 @pytest.mark.asyncio
@@ -717,12 +1038,14 @@ async def test_response_body_send_failure_preserves_committed_status_and_reraise
     assert start_sent
     assert len(handler.entries) == 1
     assert handler.entries[0]["status"] == 202
-    assert handler.entries[0]["error"] == "RuntimeError: client disconnected"
+    assert handler.entries[0]["terminal_reason"] == "body_error"
+    assert handler.entries[0]["level"] == "ERROR"
+    assert "error" not in handler.entries[0]
     assert request_id() is None
 
 
 @pytest.mark.asyncio
-async def test_exception_with_broken_string_conversion_is_logged_without_replacing_original_error():
+async def test_opted_in_exception_with_broken_string_conversion_is_logged_without_replacing_original_error():
     handler = JSONCaptureHandler()
     error = BrokenStringError()
 
@@ -731,10 +1054,14 @@ async def test_exception_with_broken_string_conversion_is_logged_without_replaci
 
     scope = {"type": "http", "method": "GET", "path": "/", "headers": [], "state": {}}
     with pytest.raises(BrokenStringError) as raised:
-        await AccessLogMiddleware(broken, AccessLogConfig(logger=_logger(handler)))(scope, _empty_receive, _discard)
+        await AccessLogMiddleware(broken, AccessLogConfig(logger=_logger(handler), capture_error=True))(
+            scope, _empty_receive, _discard
+        )
 
     assert raised.value is error
-    assert handler.entries[0]["status"] == 500
+    assert "status" not in handler.entries[0]
+    assert handler.entries[0]["terminal_reason"] == "service_error"
+    assert handler.entries[0]["level"] == "ERROR"
     assert handler.entries[0]["error"] == "BrokenStringError"
 
 
@@ -749,9 +1076,50 @@ async def test_cancellation_logs_once_reraises_and_resets_context():
     with pytest.raises(asyncio.CancelledError):
         await AccessLogMiddleware(cancelled, AccessLogConfig(logger=_logger(handler)))(scope, _empty_receive, _discard)
     assert len(handler.entries) == 1
-    assert handler.entries[0]["status"] == 500
-    assert handler.entries[0]["error"] == "CancelledError"
+    assert "status" not in handler.entries[0]
+    assert handler.entries[0]["terminal_reason"] == "cancelled"
+    assert handler.entries[0]["level"] == "ERROR"
+    assert "error" not in handler.entries[0]
     assert request_id() is None
+
+
+@pytest.mark.asyncio
+async def test_return_without_response_is_response_dropped_without_inferred_status():
+    handler = JSONCaptureHandler(LoggingPreset.GCP)
+
+    async def incomplete(_scope, _receive, _send):
+        return
+
+    scope = {"type": "http", "method": "GET", "path": "/", "headers": [], "state": {}}
+    await AccessLogMiddleware(
+        incomplete,
+        AccessLogConfig(logger=_logger(handler), preset=LoggingPreset.GCP),
+    )(scope, _empty_receive, _discard)
+
+    entry = handler.entries[0]
+    assert entry["terminal_reason"] == "response_dropped"
+    assert entry["severity"] == "ERROR"
+    assert "status" not in entry
+    assert "status" not in entry["httpRequest"]
+
+
+@pytest.mark.asyncio
+async def test_started_response_returned_without_final_body_is_response_dropped():
+    handler = JSONCaptureHandler()
+
+    async def incomplete(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+
+    scope = {"type": "http", "method": "GET", "path": "/", "headers": [], "state": {}}
+    await AccessLogMiddleware(incomplete, AccessLogConfig(logger=_logger(handler)))(
+        scope,
+        _empty_receive,
+        _discard,
+    )
+
+    assert handler.entries[0]["status"] == 204
+    assert handler.entries[0]["terminal_reason"] == "response_dropped"
+    assert handler.entries[0]["level"] == "ERROR"
 
 
 @pytest.mark.asyncio
@@ -814,6 +1182,12 @@ async def test_custom_fields_receive_final_scope_and_cannot_override_reserved_fi
     def custom_fields(scope):
         return {
             **dict.fromkeys(RESERVED_CALLBACK_FIELDS, "spoofed"),
+            "logging.googleapis.com/future": "spoofed",
+            "logging.googleapis.com/labels": {"component": "worker"},
+            "logging.googleapis.com/spanId": "spoofed",
+            "obs.internal": "spoofed",
+            "_obs_internal": "spoofed",
+            "remote_ip": "spoofed",
             "tenant": scope["path"],
             "callback_path_template": scope["route"].path,
         }
@@ -829,6 +1203,12 @@ async def test_custom_fields_receive_final_scope_and_cannot_override_reserved_fi
     assert entry["tenant"] == "/items/1"
     assert entry["callback_path_template"] == "/items/{item_id}"
     assert not {key for key in RESERVED_CALLBACK_FIELDS if entry.get(key) == "spoofed"}
+    assert entry["logging.googleapis.com/future"] == "spoofed"
+    assert entry["logging.googleapis.com/labels"] == {"component": "worker"}
+    assert entry["logging.googleapis.com/spanId"] == "spoofed"
+    assert entry["obs.internal"] == "spoofed"
+    assert entry["_obs_internal"] == "spoofed"
+    assert entry["remote_ip"] == "spoofed"
     assert {
         key: entry[key]
         for key in (
@@ -853,6 +1233,58 @@ async def test_custom_fields_receive_final_scope_and_cannot_override_reserved_fi
         "path_template": "/items/{item_id}",
         "status": 200,
     }
+
+
+@pytest.mark.parametrize(
+    ("preset", "owned"),
+    [
+        (LoggingPreset.DEFAULT, {"level": "INFO"}),
+        (
+            LoggingPreset.GCP,
+            {
+                "severity": "INFO",
+                "logging.googleapis.com/trace": TRACEPARENT[3:35],
+                "logging.googleapis.com/trace_sampled": True,
+            },
+        ),
+        (
+            LoggingPreset.AWS,
+            {"level": "INFO", "xray_trace_id": f"1-{TRACEPARENT[3:11]}-{TRACEPARENT[11:35]}"},
+        ),
+        (
+            LoggingPreset.AZURE,
+            {
+                "level": "INFO",
+                "operation_Id": TRACEPARENT[3:35],
+                "operation_ParentId": TRACEPARENT[36:52],
+            },
+        ),
+    ],
+)
+async def test_access_profile_ownership_blocks_active_spoofs_and_retains_inactive_fields(preset, owned):
+    spoofed = {
+        "level": "spoofed-level",
+        "severity": "spoofed-severity",
+        "httpRequest": {"spoofed": True},
+        "logging.googleapis.com/trace": "spoofed-gcp-trace",
+        "logging.googleapis.com/trace_sampled": False,
+        "xray_trace_id": "spoofed-xray-trace",
+        "operation_Id": "spoofed-azure-operation",
+        "operation_ParentId": "spoofed-azure-parent",
+    }
+    handler = JSONCaptureHandler(preset)
+
+    async with asgi_client(_app(handler, preset=preset, extra_fields=lambda _scope: dict(spoofed))) as client:
+        response = await client.get("/items/1", headers={"traceparent": TRACEPARENT})
+
+    assert response.status_code == 200
+    entry = handler.entries[0]
+    expected = {**spoofed, **owned}
+    if preset is LoggingPreset.GCP:
+        expected.pop("httpRequest")
+        assert entry["httpRequest"]["requestMethod"] == "GET"
+        assert entry["httpRequest"]["status"] == 200
+    assert {key: entry[key] for key in expected} == expected
 
 
 async def test_extra_fields_callback_failure_is_diagnosed_and_nonfatal(capsys):
@@ -902,6 +1334,37 @@ async def test_logger_failure_does_not_change_response(capsys):
     assert capsys.readouterr().err == "fastapi-request-observability: access log emission failed: RuntimeError\n"
 
 
+async def test_formatter_failure_emits_no_malformed_record_and_does_not_change_response(monkeypatch):
+    monkeypatch.setattr(logging, "raiseExceptions", False)
+
+    monkeypatch.setattr(
+        "fastapi_request_observability.logging._json_safe",
+        lambda _data: {"nonfinite": float("nan")},
+    )
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(JSONFormatter())
+
+    async with asgi_client(_app(handler)) as client:
+        response = await client.get("/items/1")
+
+    assert response.status_code == 200
+    assert output.getvalue() == ""
+
+
+async def test_writer_failure_is_not_retried_and_does_not_change_response(monkeypatch):
+    monkeypatch.setattr(logging, "raiseExceptions", False)
+    output = CountingFailingStream()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(JSONFormatter())
+
+    async with asgi_client(_app(handler)) as client:
+        response = await client.get("/items/1")
+
+    assert response.status_code == 200
+    assert output.calls == 1
+
+
 async def test_diagnostic_sink_failure_does_not_change_response(monkeypatch):
     monkeypatch.setattr(
         "fastapi_request_observability.access.sys",
@@ -914,6 +1377,23 @@ async def test_diagnostic_sink_failure_does_not_change_response(monkeypatch):
     assert response.status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_telemetry_failure_does_not_replace_original_application_error(capsys):
+    error = RuntimeError("application sentinel")
+
+    async def broken(_scope, _receive, _send):
+        raise error
+
+    scope = {"type": "http", "method": "GET", "path": "/", "headers": [], "state": {}}
+    with pytest.raises(RuntimeError) as raised:
+        await AccessLogMiddleware(broken, AccessLogConfig(logger=_logger(FailingHandler())))(
+            scope, _empty_receive, _discard
+        )
+
+    assert raised.value is error
+    assert capsys.readouterr().err == "fastapi-request-observability: access log emission failed: RuntimeError\n"
+
+
 async def test_negative_elapsed_clock_is_clamped_to_zero():
     handler = JSONCaptureHandler()
     values = iter([10.0, 9.0])
@@ -923,6 +1403,28 @@ async def test_negative_elapsed_clock_is_clamped_to_zero():
 
     assert response.status_code == 200
     assert handler.entries[0]["duration_ms"] == 0
+
+
+def test_duration_serializes_exact_integers_without_losing_fractional_values():
+    integral = _duration_ms(lambda: 0.003, 0.0)
+    fractional = _duration_ms(lambda: 0.0125, 0.0)
+    assert integral == 3
+    assert type(integral) is int
+    assert fractional == 12.5
+    assert type(fractional) is float
+
+
+@pytest.mark.parametrize(
+    ("finished_seconds", "expected_ms", "expected_latency"),
+    [
+        (315_576_000_000, 315_576_000_000_000, "315576000000s"),
+        (315_576_000_001, 315_576_000_001_000, None),
+    ],
+)
+def test_duration_enforces_gcp_protobuf_range(finished_seconds, expected_ms, expected_latency):
+    duration_ms = _duration_ms(lambda: finished_seconds, 0.0)
+    assert duration_ms == expected_ms
+    assert _protobuf_duration(duration_ms) == expected_latency
 
 
 async def test_custom_status_level_receives_resolved_status_and_controls_level():
@@ -941,9 +1443,29 @@ async def test_custom_status_level_receives_resolved_status_and_controls_level()
     assert statuses == [200]
 
 
-async def test_non_integer_status_level_is_diagnosed_and_uses_default_mapping(capsys):
+async def test_registered_custom_status_level_is_preserved():
+    logging.addLevelName(35, "NOTICE")
     handler = JSONCaptureHandler()
-    async with asgi_client(_app(handler, status_level=lambda _status: True)) as client:
+    async with asgi_client(_app(handler, status_level=lambda _status: 35)) as client:
+        response = await client.get("/items/1")
+    assert response.status_code == 200
+    assert handler.entries[0]["level"] == "NOTICE"
+
+
+async def test_registered_custom_status_level_is_folded_by_gcp_formatter():
+    logging.addLevelName(35, "NOTICE")
+    handler = JSONCaptureHandler(LoggingPreset.GCP)
+    async with asgi_client(_app(handler, preset=LoggingPreset.GCP, status_level=lambda _status: 35)) as client:
+        response = await client.get("/items/1")
+    assert response.status_code == 200
+    assert handler.entries[0]["severity"] == "WARNING"
+    assert "level" not in handler.entries[0]
+
+
+@pytest.mark.parametrize("invalid_level", [True, 36])
+async def test_invalid_status_level_is_diagnosed_and_uses_default_mapping(invalid_level, capsys):
+    handler = JSONCaptureHandler()
+    async with asgi_client(_app(handler, status_level=lambda _status: invalid_level)) as client:
         response = await client.get("/handled")
 
     assert response.status_code == 418
@@ -1037,9 +1559,9 @@ async def test_gcp_http_request_and_trace_shape_omit_query_and_fake_span():
     assert entry["duration_ms"] == 1250
     assert entry["httpRequest"] == {
         "requestMethod": "GET",
-        "requestUrl": "http://example.test/items/one",
+        "requestUrl": "/items/one",
         "status": 200,
-        "latency": "1.25s",
+        "latency": "1.250s",
         "remoteIp": "192.0.2.4",
         "userAgent": "gcp-agent",
     }
@@ -1047,8 +1569,112 @@ async def test_gcp_http_request_and_trace_shape_omit_query_and_fake_span():
     assert "logging.googleapis.com/spanId" not in entry
 
 
+@pytest.mark.parametrize(
+    ("preset", "provider_fields", "absent_provider_fields"),
+    [
+        (
+            LoggingPreset.AWS,
+            {"xray_trace_id": f"1-{TRACEPARENT[3:11]}-{TRACEPARENT[11:35]}"},
+            {"operation_Id", "operation_ParentId"},
+        ),
+        (
+            LoggingPreset.AZURE,
+            {
+                "operation_Id": TRACEPARENT[3:35],
+                "operation_ParentId": TRACEPARENT[36:52],
+            },
+            {"xray_trace_id"},
+        ),
+    ],
+)
+async def test_aws_and_azure_profiles_compose_level_2_application_and_access_correlation(
+    preset, provider_fields, absent_provider_fields
+):
+    handler = JSONCaptureHandler(preset)
+    logger = _logger(handler)
+    app = FastAPI()
+    app.add_middleware(
+        AccessLogMiddleware,
+        config=AccessLogConfig(logger=logger, preset=preset, trace_context_level=TraceContextLevel.LEVEL_2),
+    )
+    app.add_middleware(
+        RequestContextMiddleware,
+        config=RequestContextConfig(trace_context_level=TraceContextLevel.LEVEL_2),
+    )
+
+    @app.get("/trace", operation_id="trace")
+    async def trace_route():
+        logger.info("handler", extra={"event": "trace"})
+        return {"ok": True}
+
+    random_traceparent = f"{TRACEPARENT[:-2]}03"
+    async with asgi_client(app) as client:
+        response = await client.get(
+            "/trace",
+            headers={"X-Request-ID": "trace-request", "traceparent": random_traceparent},
+        )
+
+    assert response.status_code == 200
+    assert [entry["message"] for entry in handler.entries] == ["handler", "request completed"]
+    for entry in handler.entries:
+        assert entry["request_id"] == "trace-request"
+        assert entry["correlation_id"] == TRACEPARENT[3:35]
+        assert entry["trace_flags"] == "03"
+        assert entry["trace_sampled"] is True
+        assert entry["trace_id_random"] is True
+        assert all(entry[key] == value for key, value in provider_fields.items())
+        assert absent_provider_fields.isdisjoint(entry)
+
+
+@pytest.mark.parametrize("preset", [LoggingPreset.AWS, LoggingPreset.AZURE])
+async def test_aws_and_azure_profiles_omit_correlation_for_duplicate_traceparent_lines(preset):
+    handler = JSONCaptureHandler(preset)
+    logger = _logger(handler)
+    app = FastAPI()
+    app.add_middleware(
+        AccessLogMiddleware,
+        config=AccessLogConfig(logger=logger, preset=preset, trace_context_level=TraceContextLevel.LEVEL_2),
+    )
+    app.add_middleware(
+        RequestContextMiddleware,
+        config=RequestContextConfig(trace_context_level=TraceContextLevel.LEVEL_2),
+    )
+
+    @app.get("/trace", operation_id="trace")
+    async def trace_route():
+        logger.info("handler", extra={"event": "trace"})
+        return {"ok": True}
+
+    async with asgi_client(app) as client:
+        response = await client.get(
+            "/trace",
+            headers=[
+                ("X-Request-ID", "duplicate-trace"),
+                ("traceparent", f"{TRACEPARENT[:-2]}03"),
+                ("traceparent", "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"),
+            ],
+        )
+
+    assert response.status_code == 200
+    assert [entry["message"] for entry in handler.entries] == ["handler", "request completed"]
+    forbidden = {
+        "trace_id",
+        "parent_id",
+        "trace_flags",
+        "trace_sampled",
+        "trace_id_random",
+        "xray_trace_id",
+        "operation_Id",
+        "operation_ParentId",
+    }
+    for entry in handler.entries:
+        assert entry["request_id"] == "duplicate-trace"
+        assert entry["correlation_id"] == "duplicate-trace"
+        assert forbidden.isdisjoint(entry)
+
+
 @pytest.mark.asyncio
-async def test_gcp_http_request_omits_absent_optional_client_and_user_agent_fields():
+async def test_gcp_http_request_defaults_omit_privacy_fields():
     handler = JSONCaptureHandler(LoggingPreset.GCP)
     clock_values = iter([10.0, 10.0])
 
@@ -1078,52 +1704,247 @@ async def test_gcp_http_request_omits_absent_optional_client_and_user_agent_fiel
     assert len(handler.entries) == 1
     assert handler.entries[0]["httpRequest"] == {
         "requestMethod": "GET",
-        "requestUrl": "https://example.test/health",
         "status": 204,
         "latency": "0s",
     }
-    assert "remote_ip" not in handler.entries[0]
+    assert "path" not in handler.entries[0]
+    assert "peer_ip" not in handler.entries[0]
     assert "user_agent" not in handler.entries[0]
     assert "logging.googleapis.com/trace" not in handler.entries[0]
     assert "logging.googleapis.com/trace_sampled" not in handler.entries[0]
 
 
 @pytest.mark.parametrize(
-    ("scope", "expected"),
+    ("capture_path", "capture_peer_ip", "capture_user_agent", "expected_field", "expected_http_field"),
     [
-        ({"scheme": "https", "headers": [], "server": ("127.0.0.1", 8443)}, "https://127.0.0.1:8443/path"),
-        (
-            {"scheme": "https", "headers": [], "server": ("2001:db8::1", 8443)},
-            "https://[2001:db8::1]:8443/path",
-        ),
-        (
-            {"scheme": "https", "headers": [], "server": ("[2001:db8::1]", 8443)},
-            "https://[2001:db8::1]:8443/path",
-        ),
-        ({"headers": [], "server": ("127.0.0.1", 8000)}, "http://127.0.0.1:8000/path"),
-        ({"scheme": "http", "headers": [], "server": ("/var/run/app.sock", None)}, "/path"),
+        (True, False, False, ("path", "/items/one"), ("requestUrl", "/items/one")),
+        (False, True, False, ("peer_ip", "192.0.2.4"), ("remoteIp", "192.0.2.4")),
+        (False, False, True, ("user_agent", "agent/1"), ("userAgent", "agent/1")),
     ],
 )
-def test_request_url_uses_valid_server_authority_when_host_header_is_absent(scope, expected):
-    assert _request_url(scope, "/path") == expected
+async def test_privacy_capture_options_are_independent(
+    capture_path,
+    capture_peer_ip,
+    capture_user_agent,
+    expected_field,
+    expected_http_field,
+):
+    handler = JSONCaptureHandler(LoggingPreset.GCP)
+    app = FastAPI()
+    app.add_middleware(
+        AccessLogMiddleware,
+        config=AccessLogConfig(
+            logger=_logger(handler),
+            preset=LoggingPreset.GCP,
+            capture_path=capture_path,
+            capture_peer_ip=capture_peer_ip,
+            capture_user_agent=capture_user_agent,
+        ),
+    )
+    app.add_middleware(RequestContextMiddleware)
+
+    @app.get("/items/{item_id}")
+    async def item(item_id: str):
+        return {"item": item_id}
+
+    async with asgi_client(
+        app,
+        client=("192.0.2.4", 1),
+    ) as client:
+        await client.get("/items/one?secret=yes", headers={"user-agent": "agent/1"})
+
+    entry = handler.entries[0]
+    assert entry[expected_field[0]] == expected_field[1]
+    assert entry["httpRequest"][expected_http_field[0]] == expected_http_field[1]
+    assert len({"path", "peer_ip", "user_agent"} & entry.keys()) == 1
+    assert len({"requestUrl", "remoteIp", "userAgent"} & entry["httpRequest"].keys()) == 1
+
+
+@pytest.mark.parametrize(
+    ("client_host", "expected"),
+    [
+        ("2001:0db8:0:0:0:0:0:1", "2001:db8::1"),
+        ("fe80::1%eth0", None),
+        ("internal.example", None),
+    ],
+)
+async def test_peer_ip_is_canonical_or_omitted_in_core_and_gcp(client_host, expected):
+    handler = JSONCaptureHandler(LoggingPreset.GCP)
+    async with asgi_client(_app(handler, preset=LoggingPreset.GCP), client=(client_host, 443)) as client:
+        response = await client.get("/items/one")
+
+    assert response.status_code == 200
+    entry = handler.entries[0]
+    if expected is None:
+        assert "peer_ip" not in entry
+        assert "remoteIp" not in entry["httpRequest"]
+    else:
+        assert entry["peer_ip"] == expected
+        assert entry["httpRequest"]["remoteIp"] == expected
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        [],
+        [b""],
+        [b" "],
+        [b" agent/1"],
+        [b"agent/1 "],
+        [b"agent/1", b"agent/1"],
+        [b"agent/1\x7fforged"],
+    ],
+)
+async def test_user_agent_requires_one_nonempty_control_free_field_line(values):
+    handler = JSONCaptureHandler()
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "raw_path": b"/",
+        "headers": [(b"user-agent", value) for value in values],
+        "state": {},
+    }
+    middleware = AccessLogMiddleware(
+        app,
+        AccessLogConfig(logger=_logger(handler), capture_user_agent=True),
+    )
+
+    await middleware(scope, _empty_receive, _discard)
+
+    assert "user_agent" not in handler.entries[0]
+
+
+async def test_user_agent_preserves_valid_horizontal_tab_whitespace():
+    handler = JSONCaptureHandler()
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "raw_path": b"/",
+        "headers": [(b"user-agent", b"agent/1\tcomponent/2")],
+        "state": {},
+    }
+    await AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler), capture_user_agent=True))(
+        scope, _empty_receive, _discard
+    )
+    assert handler.entries[0]["user_agent"] == "agent/1\tcomponent/2"
+
+
+async def test_user_agent_preserves_valid_internal_space():
+    handler = JSONCaptureHandler()
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "raw_path": b"/",
+        "headers": [(b"user-agent", b"agent/1 component/2")],
+        "state": {},
+    }
+    await AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler), capture_user_agent=True))(
+        scope, _empty_receive, _discard
+    )
+    assert handler.entries[0]["user_agent"] == "agent/1 component/2"
 
 
 @pytest.mark.parametrize(
     ("scope", "expected"),
     [
         ({"raw_path": b"/items/%2F%ff", "path": "/items//�"}, "/items/%2F%ff"),
-        ({"path": "/items/é"}, "/items/%C3%A9"),
-        ({"path": "/items/a:b@c;d=e"}, "/items/a:b@c;d=e"),
-        ({"path": ""}, "/"),
+        ({"raw_path": b"/objects/bad%2", "path": "/objects/bad%2"}, "/objects/bad%2"),
+        ({"raw_path": b"/objects/bad%GG", "path": "/objects/bad%GG"}, "/objects/bad%GG"),
+        ({"raw_path": b"/widgets/a#literal", "path": "/widgets/a#literal"}, "/widgets/a%23literal"),
+        ({"raw_path": b"*", "path": "*"}, "*"),
+        ({"path": "/items/é"}, None),
+        ({"path": "/items/a:b@c;d=e"}, None),
+        ({"path": ""}, None),
     ],
 )
-def test_request_path_prefers_wire_encoding_and_safely_quotes_fallback(scope, expected):
+def test_request_path_uses_only_wire_encoding(scope, expected):
     assert _request_path(scope) == expected
+
+
+async def test_access_middleware_uses_only_the_nonempty_asgi_raw_path_boundary():
+    handler = JSONCaptureHandler()
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    middleware = AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler), capture_path=True))
+    for raw_path in [b"", b"/objects/bad%2", b"*", b"/widgets/a#literal"]:
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": raw_path.decode("ascii"),
+            "raw_path": raw_path,
+            "headers": [],
+            "state": {},
+        }
+        await middleware(scope, _empty_receive, _discard)
+
+    assert [entry.get("path") for entry in handler.entries] == [
+        None,
+        "/objects/bad%2",
+        "*",
+        "/widgets/a%23literal",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (b"agent/\x80\xff", "agent/\x80\xff"),
+        ("Grüße".encode(), "GrÃ¼Ãe"),
+    ],
+)
+async def test_user_agent_preserves_asgi_header_bytes_with_latin_1_mapping(value, expected):
+    handler = JSONCaptureHandler()
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "raw_path": b"/",
+        "headers": [(b"user-agent", value)],
+        "state": {},
+    }
+    await AccessLogMiddleware(app, AccessLogConfig(logger=_logger(handler), capture_user_agent=True))(
+        scope, _empty_receive, _discard
+    )
+    assert handler.entries[0]["user_agent"] == expected
 
 
 @pytest.mark.parametrize(
     ("duration_ms", "expected"),
-    [(0.0, "0s"), (0.000001, "0.000000001s"), (1000.0, "1s"), (1250.0, "1.25s")],
+    [
+        (0.0, "0s"),
+        (0.000001, "0.000000001s"),
+        (10.0, "0.010s"),
+        (12.5, "0.012500s"),
+        (999.9999996, "1s"),
+        (1000.0, "1s"),
+        (1250.0, "1.250s"),
+    ],
 )
 def test_protobuf_duration_serialization_boundaries(duration_ms, expected):
     assert _protobuf_duration(duration_ms) == expected

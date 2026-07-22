@@ -17,6 +17,7 @@ from ._context import (
     _reset_context,
     current_request_context,
 )
+from .trace import TraceContextLevel, resolve_trace_context_level
 
 type _Scope = MutableMapping[str, Any]
 type _Message = MutableMapping[str, Any]
@@ -28,7 +29,7 @@ _MISSING = object()
 _HEADER_NAME_CHARACTERS = frozenset("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class RequestContextConfig:
     """Configure request-ID and trace-context extraction."""
 
@@ -39,12 +40,18 @@ class RequestContextConfig:
     request_id_generator: RequestIDGenerator = _default_request_id
     request_id_validator: RequestIDValidator = _default_validate_request_id
     inject_response_header: bool = True
+    trace_context_level: TraceContextLevel | int = TraceContextLevel.LEVEL_1
 
     def __post_init__(self) -> None:
         """Validate headers and callbacks eagerly."""
         _validate_header_name(self.request_id_header, "request_id_header")
         _validate_header_name(self.traceparent_header, "traceparent_header")
         _validate_header_name(self.tracestate_header, "tracestate_header")
+        object.__setattr__(
+            self,
+            "trace_context_level",
+            resolve_trace_context_level(self.trace_context_level),
+        )
         if self.response_header is not None:
             _validate_header_name(self.response_header, "response_header")
         if not callable(self.request_id_generator):
@@ -73,6 +80,8 @@ class RequestContextMiddleware:
         if created_context:
             context = _context_from_scope(scope, self.config)
             scope[_SCOPE_CONTEXT_KEY] = context
+        elif context.trace_context_level is not self.config.trace_context_level:
+            raise RuntimeError("trace_context_level mismatch between RequestContextMiddleware and AccessLogMiddleware")
 
         token = None
         if current_request_context() is not context:
@@ -102,6 +111,7 @@ def _context_from_scope(scope: _Scope, config: RequestContextConfig) -> RequestC
         tracestate_header=config.tracestate_header,
         generator=config.request_id_generator,
         validator=config.request_id_validator,
+        trace_context_level=config.trace_context_level,
     )
 
 
