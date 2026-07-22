@@ -58,6 +58,10 @@ inspect: build
 [group('package')]
 package-check: inspect smoke-wheel smoke-sdist
 
+[group('package')]
+e2e-image image_tag:
+    docker build --file e2e/Dockerfile --tag "{{ image_tag }}" .
+
 [group('lifecycle')]
 install:
     uv sync --locked
