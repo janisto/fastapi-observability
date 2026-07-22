@@ -20,14 +20,10 @@ from fastapi.routing import APIRoute
 from ._context import _bind_context, _reset_context, current_request_context
 from .logging import (
     _ACCESS_FIELDS_KEY,
-    AwsProfileVersion,
-    AzureProfileVersion,
-    GcpProfileVersion,
     LoggingPreset,
     _AccessFields,
     _context_fields,
     _is_access_reserved_field,
-    _resolve_provider_profile_versions,
 )
 from .middleware import (
     _MISSING,
@@ -75,9 +71,6 @@ class AccessLogConfig:
     clock: Clock = time.perf_counter
     status_level: StatusLevel | None = None
     extra_fields: ExtraFields | None = None
-    gcp_profile_version: GcpProfileVersion | str | None = None
-    aws_profile_version: AwsProfileVersion | str | None = None
-    azure_profile_version: AzureProfileVersion | str | None = None
     trace_context_level: TraceContextLevel | int = TraceContextLevel.LEVEL_1
     capture_path: bool = False
     capture_peer_ip: bool = False
@@ -85,13 +78,7 @@ class AccessLogConfig:
     capture_error: bool = False
 
     def __post_init__(self) -> None:
-        """Validate and freeze effective profile and privacy settings."""
-        gcp, aws, azure = _resolve_provider_profile_versions(
-            self.preset, self.gcp_profile_version, self.aws_profile_version, self.azure_profile_version
-        )
-        object.__setattr__(self, "gcp_profile_version", gcp)
-        object.__setattr__(self, "aws_profile_version", aws)
-        object.__setattr__(self, "azure_profile_version", azure)
+        """Validate and freeze effective trace and privacy settings."""
         object.__setattr__(
             self,
             "trace_context_level",

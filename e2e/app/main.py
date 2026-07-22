@@ -17,9 +17,6 @@ from fastapi.responses import JSONResponse
 from fastapi_request_observability import (
     AccessLogConfig,
     AccessLogMiddleware,
-    AwsProfileVersion,
-    AzureProfileVersion,
-    GcpProfileVersion,
     JSONFormatter,
     LoggingPreset,
     RequestContextConfig,
@@ -55,19 +52,9 @@ _PRESET = {
 }.get(_CASE, LoggingPreset.DEFAULT)
 
 
-def _profile_arguments() -> dict[str, Any]:
-    if _PRESET is LoggingPreset.AWS:
-        return {"aws_profile_version": AwsProfileVersion.V0_1_0}
-    if _PRESET is LoggingPreset.AZURE:
-        return {"azure_profile_version": AzureProfileVersion.V0_1_0}
-    if _PRESET is LoggingPreset.GCP:
-        return {"gcp_profile_version": GcpProfileVersion.V0_1_0}
-    return {}
-
-
 def _configured_logger(name: str) -> logging.Logger:
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JSONFormatter(_PRESET, **_profile_arguments()))
+    handler.setFormatter(JSONFormatter(_PRESET))
     logger = logging.getLogger(name)
     logger.handlers.clear()
     logger.addHandler(handler)
@@ -82,8 +69,6 @@ def _extra_fields(_: Mapping[str, Any]) -> Mapping[str, Any]:
 
 _APPLICATION_LOGGER = _configured_logger("e2e.handler")
 _ACCESS_LOGGER = _configured_logger("e2e.access")
-_ACCESS_ARGUMENTS = _profile_arguments()
-
 app = FastAPI()
 app.add_middleware(
     AccessLogMiddleware,
@@ -92,7 +77,6 @@ app.add_middleware(
         preset=_PRESET,
         trace_context_level=_TRACE_LEVEL,
         extra_fields=_extra_fields if _CASE == "gcp_level1" else None,
-        **_ACCESS_ARGUMENTS,
     ),
 )
 app.add_middleware(

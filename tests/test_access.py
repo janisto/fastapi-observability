@@ -14,9 +14,6 @@ from fastapi.routing import APIRoute
 from fastapi_request_observability import (
     AccessLogConfig,
     AccessLogMiddleware,
-    AwsProfileVersion,
-    AzureProfileVersion,
-    GcpProfileVersion,
     JSONFormatter,
     LoggingPreset,
     RequestContextConfig,
@@ -267,24 +264,9 @@ async def test_filtered_access_record_does_not_run_optional_enrichment():
     assert handler.entries == []
 
 
-def test_access_config_resolves_latest_preserves_pin_and_validates_new_options():
-    latest = AccessLogConfig(preset=LoggingPreset.GCP)
-    pinned = AccessLogConfig(preset=LoggingPreset.GCP, gcp_profile_version="0.1.0")
-    assert latest.gcp_profile_version is GcpProfileVersion.V0_1_0
-    assert pinned.gcp_profile_version is GcpProfileVersion.V0_1_0
-    assert AccessLogConfig().gcp_profile_version is None
+def test_access_config_validates_trace_and_privacy_options():
     assert AccessLogConfig().trace_context_level is TraceContextLevel.LEVEL_1
     assert AccessLogConfig(trace_context_level=2).trace_context_level is TraceContextLevel.LEVEL_2
-    with pytest.raises(ValueError, match="unsupported GCP profile version"):
-        AccessLogConfig(preset=LoggingPreset.GCP, gcp_profile_version="0.2.0")
-    with pytest.raises(ValueError, match=r"requires LoggingPreset\.GCP"):
-        AccessLogConfig(gcp_profile_version="0.1.0")
-    assert AccessLogConfig(preset=LoggingPreset.AWS).aws_profile_version is AwsProfileVersion.V0_1_0
-    assert AccessLogConfig(preset=LoggingPreset.AZURE).azure_profile_version is AzureProfileVersion.V0_1_0
-    with pytest.raises(ValueError, match="unsupported AWS profile version"):
-        AccessLogConfig(preset=LoggingPreset.AWS, aws_profile_version="0.2.0")
-    with pytest.raises(ValueError, match="unsupported AZURE profile version"):
-        AccessLogConfig(preset=LoggingPreset.AZURE, azure_profile_version="0.2.0")
     invalid: Any = 1
     for name in ("capture_path", "capture_peer_ip", "capture_user_agent", "capture_error"):
         kwargs: Any = {name: invalid}

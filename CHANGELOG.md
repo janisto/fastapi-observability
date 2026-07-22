@@ -38,9 +38,6 @@ constructor layouts or compatibility-only options.
 
 ### Added
 
-- Added exact current `0.1.0` profiles for GCP, AWS, and Azure, typed exact
-  pinning, and resolved-version introspection on formatter and access
-  configuration.
 - Added independent `capture_path`, `capture_peer_ip`, and
   `capture_user_agent`, and `capture_error` opt-ins.
 - Added explicit W3C Trace Context Level 2 configuration, including its
@@ -49,8 +46,6 @@ constructor layouts or compatibility-only options.
 
 ### Changed
 
-- Expanded the provider-neutral basic example with the Level 1 default, an
-  explicit Level 2 application factory, and behavioral output tests.
 - Removed v1 positional-constructor and fixed-value option shims so the v2
   surface has one explicit configuration form.
 - Set distribution and lock metadata to `2.0.0` so package validation cannot

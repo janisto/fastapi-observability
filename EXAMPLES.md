@@ -96,16 +96,8 @@ The package does not create spans and therefore does not manufacture
 uv run uvicorn examples.basic.main:app --no-access-log
 ```
 
-The default `app` leaves the trace-level option unset and therefore uses Level
-1. To enable Level 2, run the explicit factory with:
-
-```bash
-uv run uvicorn examples.basic.main:create_level_2_app --factory --no-access-log
-```
-
-Both paths share the same application factory. The default preset writes
-`level` and generic correlation fields without provider-specific trace aliases;
-only Level 2 projects `trace_id_random` from version-`00` flags bit one.
+The default preset writes `level` and the generic correlation fields without
+provider-specific trace aliases.
 
 ## AWS
 

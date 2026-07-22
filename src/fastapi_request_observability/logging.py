@@ -21,24 +21,6 @@ class LoggingPreset(StrEnum):
     AZURE = "azure"
 
 
-class GcpProfileVersion(StrEnum):
-    """Specification-defined Google Cloud structured-stdout profiles."""
-
-    V0_1_0 = "0.1.0"
-
-
-class AwsProfileVersion(StrEnum):
-    """Specification-defined AWS structured-stdout profiles."""
-
-    V0_1_0 = "0.1.0"
-
-
-class AzureProfileVersion(StrEnum):
-    """Specification-defined Azure structured-stdout profiles."""
-
-    V0_1_0 = "0.1.0"
-
-
 def _gcp_severity(level: int) -> str:
     if level >= logging.CRITICAL:
         return "CRITICAL"
@@ -49,45 +31,6 @@ def _gcp_severity(level: int) -> str:
     if level >= logging.INFO:
         return "INFO"
     return "DEBUG"
-
-
-def _resolve_gcp_profile_version(
-    preset: LoggingPreset,
-    version: GcpProfileVersion | str | None,
-) -> GcpProfileVersion | None:
-    if preset is not LoggingPreset.GCP:
-        if version is not None:
-            raise ValueError("gcp_profile_version requires LoggingPreset.GCP")
-        return None
-    if version is None:
-        return GcpProfileVersion.V0_1_0
-    try:
-        return GcpProfileVersion(version)
-    except ValueError as error:
-        raise ValueError("unsupported GCP profile version; expected 0.1.0") from error
-
-
-def _resolve_provider_profile_versions(
-    preset: LoggingPreset,
-    gcp: GcpProfileVersion | str | None,
-    aws: AwsProfileVersion | str | None,
-    azure: AzureProfileVersion | str | None,
-) -> tuple[GcpProfileVersion | None, AwsProfileVersion | None, AzureProfileVersion | None]:
-    if preset is not LoggingPreset.GCP and gcp is not None:
-        raise ValueError("gcp_profile_version requires LoggingPreset.GCP")
-    if preset is not LoggingPreset.AWS and aws is not None:
-        raise ValueError("aws_profile_version requires LoggingPreset.AWS")
-    if preset is not LoggingPreset.AZURE and azure is not None:
-        raise ValueError("azure_profile_version requires LoggingPreset.AZURE")
-    try:
-        resolved_gcp = GcpProfileVersion("0.1.0" if gcp is None else gcp) if preset is LoggingPreset.GCP else None
-        resolved_aws = AwsProfileVersion("0.1.0" if aws is None else aws) if preset is LoggingPreset.AWS else None
-        resolved_azure = (
-            AzureProfileVersion("0.1.0" if azure is None else azure) if preset is LoggingPreset.AZURE else None
-        )
-    except ValueError as error:
-        raise ValueError(f"unsupported {preset.value.upper()} profile version; expected 0.1.0") from error
-    return resolved_gcp, resolved_aws, resolved_azure
 
 
 _STANDARD_RECORD_FIELDS = frozenset(logging.makeLogRecord({}).__dict__)
@@ -159,17 +102,11 @@ class JSONFormatter(logging.Formatter):
         preset: LoggingPreset = LoggingPreset.DEFAULT,
         *,
         include_source: bool = False,
-        gcp_profile_version: GcpProfileVersion | str | None = None,
-        aws_profile_version: AwsProfileVersion | str | None = None,
-        azure_profile_version: AzureProfileVersion | str | None = None,
     ) -> None:
         """Initialize formatting and provider-specific field behavior."""
         super().__init__()
         self.preset = preset
         self.include_source = include_source
-        self.gcp_profile_version, self.aws_profile_version, self.azure_profile_version = (
-            _resolve_provider_profile_versions(preset, gcp_profile_version, aws_profile_version, azure_profile_version)
-        )
 
     @override
     def format(self, record: logging.LogRecord) -> str:

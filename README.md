@@ -92,17 +92,13 @@ from fastapi import FastAPI
 from fastapi_request_observability import (
     AccessLogConfig,
     AccessLogMiddleware,
-    GcpProfileVersion,
     JSONFormatter,
     LoggingPreset,
     RequestContextMiddleware,
 )
 
-gcp_profile_version = GcpProfileVersion.V0_1_0
 handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(
-    JSONFormatter(LoggingPreset.GCP, gcp_profile_version=gcp_profile_version)
-)
+handler.setFormatter(JSONFormatter(LoggingPreset.GCP))
 
 root_logger = logging.getLogger()
 root_logger.handlers.clear()
@@ -119,7 +115,6 @@ app.add_middleware(
     config=AccessLogConfig(
         logger=logging.getLogger("http.access"),
         preset=LoggingPreset.GCP,
-        gcp_profile_version=gcp_profile_version,
     ),
 )
 app.add_middleware(RequestContextMiddleware)
@@ -196,12 +191,6 @@ trace_level = TraceContextLevel.LEVEL_2
 access_config = AccessLogConfig(trace_context_level=trace_level)
 request_context_config = RequestContextConfig(trace_context_level=trace_level)
 ```
-
-The provider-neutral [`examples/basic/main.py`](examples/basic/main.py) leaves
-the trace-level option unset for its default Level 1 `app`. To enable Level 2,
-run `create_level_2_app()`, which passes `TraceContextLevel.LEVEL_2` to both
-middleware configurations. Native tests send flags `03` through both paths and
-verify that only Level 2 emits `trace_id_random`.
 
 Values other than `1` or `2` fail configuration immediately. Both levels
 preserve `trace_flags` and derive `trace_sampled` from bit zero. For version
@@ -281,20 +270,15 @@ Pass the same preset to the formatter and access configuration:
 ```python
 from fastapi_request_observability import (
     AccessLogConfig,
-    AwsProfileVersion,
-    AzureProfileVersion,
-    GcpProfileVersion,
     JSONFormatter,
     LoggingPreset,
 )
 
 preset = LoggingPreset.GCP  # or AWS, AZURE, DEFAULT
-version = GcpProfileVersion.V0_1_0
-handler.setFormatter(JSONFormatter(preset, gcp_profile_version=version))
+handler.setFormatter(JSONFormatter(preset))
 access_config = AccessLogConfig(
     logger=logging.getLogger("http.access"),
     preset=preset,
-    gcp_profile_version=version,
 )
 ```
 
@@ -303,22 +287,11 @@ access_config = AccessLogConfig(
   field. `logging.googleapis.com/trace` contains the validated raw W3C trace
   ID and requires no project-ID configuration. The preset never emits a fake
   `logging.googleapis.com/spanId`. Its `httpRequest.requestUrl` is the opt-in,
-  query-free path only; scheme and authority are never included. Omitting
-  `gcp_profile_version` resolves once to the newest profile supported by the
-  installed package, currently `0.1.0`; unsupported pins fail initialization
-  and no network lookup occurs. The resolved enum remains inspectable on both
-  `JSONFormatter.gcp_profile_version` and
-  `AccessLogConfig.gcp_profile_version`.
+  query-free path only; scheme and authority are never included.
 - `AWS` adds `xray_trace_id` in `1-8hex-24hex` form. It does not create an X-Ray
-  segment. Omission resolves to exact current profile `0.1.0`; pin with
-  `AwsProfileVersion.V0_1_0`. The effective enum remains inspectable as
-  `aws_profile_version` on both formatter and access configuration, and other
-  pins fail initialization.
+  segment.
 - `AZURE` adds `operation_Id` and `operation_ParentId`. It does not start or
-  export Application Insights telemetry. Omission resolves to exact current
-  profile `0.1.0`; pin with `AzureProfileVersion.V0_1_0`. The effective enum
-  remains inspectable as `azure_profile_version` on both formatter and access
-  configuration, and other pins fail initialization.
+  export Application Insights telemetry.
 
 Provider fields correlate logs only. Trace creation and export remain the
 application's responsibility.

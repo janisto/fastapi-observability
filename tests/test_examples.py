@@ -19,8 +19,7 @@ from fastapi_request_observability import (
 from tests._client import asgi_client
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
-TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-01"
-RANDOM_TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-03"
+TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-03"
 
 
 class _ExampleModule(Protocol):
@@ -96,6 +95,9 @@ async def test_provider_example_is_runnable(module_name, capsys):
     for entry in relevant_entries:
         assert entry["request_id"] == "example-request"
         assert entry["correlation_id"] == TRACE_ID
+        assert entry["trace_flags"] == "03"
+        assert entry["trace_sampled"] is True
+        assert "trace_id_random" not in entry
 
     assert access["path_template"] == "/health"
     assert access["operation_id"] == "health_check"
@@ -119,34 +121,6 @@ async def test_provider_example_is_runnable(module_name, capsys):
         assert access["operation_ParentId"] == "00f067aa0ba902b7"
     else:
         assert access["level"] == "INFO"
-
-
-@pytest.mark.parametrize(
-    ("factory_name", "expected_random"),
-    [
-        ("create_default_app", None),
-        ("create_level_2_app", True),
-    ],
-)
-async def test_basic_example_demonstrates_default_and_level_2_output(factory_name, expected_random, capsys):
-    module = importlib.reload(importlib.import_module("examples.basic.main"))
-    capsys.readouterr()
-    app = getattr(module, factory_name)()
-
-    async with asgi_client(app) as client:
-        response = await client.get(
-            "/health",
-            headers={"X-Request-ID": "trace-level-example", "traceparent": RANDOM_TRACEPARENT},
-        )
-
-    assert response.status_code == 200
-    entries = [json.loads(line) for line in capsys.readouterr().err.splitlines() if line]
-    relevant_entries = [entry for entry in entries if entry["logger"] in {"examples.basic.main", "http.access"}]
-    assert [entry["message"] for entry in relevant_entries] == ["health check", "request completed"]
-    for entry in relevant_entries:
-        assert entry["trace_flags"] == "03"
-        assert entry["trace_sampled"] is True
-        assert entry.get("trace_id_random") is expected_random
 
 
 @pytest.mark.parametrize(
