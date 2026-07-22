@@ -9,8 +9,8 @@ pre-1.0 releases, and unreleased commits are not supported. Upgrade to the
 latest release before reporting a vulnerability when possible.
 
 The supported Python and FastAPI versions are documented in the
-[README](README.md#installation). A problem caused solely by an unsupported
-Python or FastAPI version is outside this policy.
+[README](README.md#requirements-and-installation). A problem caused solely by
+an unsupported Python or FastAPI version is outside this policy.
 
 ## Reporting a Vulnerability
 

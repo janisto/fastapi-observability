@@ -27,7 +27,7 @@ The release boundary has five parts:
 
 1. **Reviewed source:** Version metadata, changelog, code, and documentation are
    merged before a draft release is created. The draft targets the exact
-   reviewed commit on `main`.
+   final merged commit on `main`.
 2. **GitHub Release:** Creating the draft with `--target` lets GitHub create the
    lightweight tag. Publishing the reviewed draft triggers the workflow. Do
    not push the release tag separately.
@@ -61,7 +61,7 @@ attestations.
 | Environment deployment policy | `v*` tags |
 | Runner | GitHub-hosted `ubuntu-latest` |
 | Workflow trigger | GitHub Release `published` |
-| Tag creation | `gh release create --target` against the reviewed commit |
+| Tag creation | `gh release create --target` against the final merged commit |
 | Build frontend and backend | `uv build --no-sources` and `uv_build` |
 | Local build recipe | `just build`, which depends on `clean-dist` |
 | Standalone local cleanup | `just clean-dist` |
@@ -106,42 +106,34 @@ from a fresh checkout. The repository's canonical [`Justfile`](Justfile) is the
 maintainer-facing local cleanup and validation layer: `build` depends on
 `clean-dist`, and `clean-dist` removes only the generated `dist/` directory.
 
-## Release preparation branch and E2E gates
+## Release preparation branch and consumer image
 
 Every release preparation uses a same-repository source branch named
 `release/prepare-vX.Y.Z`, targets `main`, and uses the pull request title
 `chore: prepare vX.Y.Z`. The branch and title versions must agree with the
 version being released. When this repository permits a prerelease, use its
-exact reviewed prerelease suffix in both the branch and title. The `release/`
-namespace is reserved for this process;
-a release branch from a fork, a different target, or a malformed name fails
-the gate.
+exact reviewed prerelease suffix in both the branch and title. Use the
+`release/` namespace only for this process.
 
-The CI workflow separates two checks:
-
-- `E2E consumer image` runs only for a valid release preparation pull request
-  and builds the production-shaped consumer with
-  `just e2e-image observability-e2e-local:ci`.
-- `Release E2E gate` reports on every pull request. It passes as not applicable
-  for an ordinary branch, but for `release/` it succeeds only when the branch,
-  title, repository, target, and image-build result are valid.
-
-Require `Release E2E gate` in the `main` ruleset; do not require the conditional
-`E2E consumer image` job. Land the workflow on `main` and let the gate report
-once before adding its exact check name to the ruleset. Preserve every existing
-required check. For local image diagnosis, run:
+The conditional `Consumer image build` CI job runs for a same-repository
+release preparation pull request targeting `main`. It builds the
+production-shaped consumer with
+`just e2e-image observability-e2e-local:ci`. The build verifies packaging and
+integration only. It does not run the image, validate emitted logs, compare
+implementations, or approve a release. It is not a required status check. For
+local image diagnosis, run:
 
 ```bash
 just e2e-image observability-e2e-local:manual
 ```
 
-The sibling image job proves only that the consumer image builds. It does not
-verify actual log output. After the release preparation merges, stop before
-creating a tag or publishing a GitHub Release. Update this sibling's revision
-in the central [`janisto/observability`](https://github.com/janisto/observability)
-repository to the final merged `main` commit, then follow its `RELEASE.md` and
-run the complete `just e2e --authoritative` matrix on Docker Engine from clean,
-pinned checkouts. Tag and publish only after that central result passes.
+The recipe prefers Podman and falls back to Docker.
+
+Optional independent tooling may exercise the public contract documented in
+[`e2e/README.md`](e2e/README.md). Any audit result is informational only; it is
+never a publication requirement and neither approves nor blocks publication.
+Publishing the reviewed GitHub Release is the maintainer's manual authorization
+for the PyPI upload.
 
 ## Maintainer release guide
 
@@ -174,9 +166,9 @@ git diff --check
 
 `just qa` runs Ruff lint and formatting checks, Ty, pytest, branch coverage,
 the repository's coverage threshold, actionlint, and
-[zizmor](https://docs.zizmor.sh/). `just package-check` reaches the
-`build` recipe, whose `clean-dist` prerequisite removes `dist/` before building
-the exact wheel and source distribution. It then inspects their metadata and
+[zizmor](https://docs.zizmor.sh/). `just package-check` reaches the `build`
+recipe, whose `clean-dist` prerequisite removes `dist/` before building the
+exact wheel and source distribution. It then inspects their metadata and
 contents and runs the smoke test against each artifact in an isolated
 environment. Both commands are required; `just package-check` does not include
 the source-level QA gate.
@@ -187,23 +179,40 @@ deleted or renamed module from surviving a local rebuild.
 Run `just clean-dist` independently to remove generated distributions without
 starting a new build.
 
-Merge the release preparation through a green pull request only after
-`Release E2E gate` passes. Complete the central authoritative gate described
-above before proceeding to the next publication step.
+Merge the release preparation through a green pull request. If the conditional
+`Consumer image build` ran, inspect its result as an additional packaging
+diagnostic. The maintainer then decides whether to release the exact final
+merged commit; no external audit approval is required.
 
 ### 3. Draft and review the GitHub Release
 
-Confirm that the tag, GitHub Release, and PyPI version do not already exist.
-Then use the same draft-first GitHub CLI flow as the sibling observability
-repositories:
+Set `TARGET` to the final merged commit shown by the release preparation pull
+request, not merely the current `main` tip. Start from a clean checkout, check
+out that exact commit, and derive the package version from it:
 
 ```bash
+set -euo pipefail
 git fetch origin main
-git switch main
-git merge --ff-only origin/main
+test -z "$(git status --porcelain)"
+TARGET="<exact-merged-release-commit>"
+test "$(git cat-file -t "$TARGET")" = commit
+git merge-base --is-ancestor "$TARGET" origin/main
+git switch --detach "$TARGET"
 
 VERSION="$(uv version --short)"
-TARGET="$(git rev-parse origin/main)"
+test "$(git rev-parse HEAD)" = "$TARGET"
+test -z "$(git status --porcelain)"
+```
+
+Confirm that no remote tag, GitHub Release, or PyPI version already exists for
+`VERSION`. Then create the draft from the selected commit:
+
+```bash
+set -euo pipefail
+test -n "${TARGET:-}"
+test -n "${VERSION:-}"
+test "$(git rev-parse HEAD)" = "$TARGET"
+test -z "$(git status --porcelain)"
 
 gh release create "v$VERSION" \
   --target "$TARGET" \
@@ -215,10 +224,6 @@ gh release create "v$VERSION" \
 
 gh release view "v$VERSION" --web
 ```
-
-Before creating the draft, verify that `TARGET` is the exact reviewed commit
-that should be released. Do not use a newer unreviewed `main` commit merely
-because it is currently at the branch tip.
 
 Review the generated previous tag, merged pull requests, contributors, and
 full-changelog link. Edit the notes for accuracy and clarity, and ensure every
@@ -323,7 +328,7 @@ uv run --isolated --no-project \
 Finally, verify that:
 
 - the PyPI project page shows the released version and both distributions;
-- the GitHub Release tag points to the reviewed commit;
+- the GitHub Release tag points to the exact final merged commit;
 - a stable GitHub Release carries the **Latest** label;
 - the GitHub Release is immutable;
 - the changelog, release notes, and published behavior agree; and

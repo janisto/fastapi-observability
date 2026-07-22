@@ -1,4 +1,4 @@
-"""Real-process FastAPI consumer for the central E2E suite."""
+"""Production-shaped FastAPI consumer for optional independent audits."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from fastapi_request_observability import (
 )
 
 _CASES = frozenset({"common_level1", "common_level2", "aws_level1", "azure_level1", "gcp_level1"})
+_MAX_PORT = 65_535
 _NESTED_CONFIGURATION = {
     "system_id": "sys-402",
     "server_settings": {
@@ -40,6 +41,16 @@ def _required_environment(name: str) -> str:
     return value
 
 
+def _validate_port() -> None:
+    raw = os.environ.get("PORT", "8080")
+    if not raw.isascii() or not raw.isdecimal():
+        raise RuntimeError("PORT must be an integer")
+    value = int(raw)
+    if value < 1 or value > _MAX_PORT:
+        raise RuntimeError("PORT must be between 1 and 65535")
+
+
+_validate_port()
 _CASE = _required_environment("OBS_E2E_CASE")
 if _CASE not in _CASES:
     raise RuntimeError("OBS_E2E_CASE must select one supported E2E case")

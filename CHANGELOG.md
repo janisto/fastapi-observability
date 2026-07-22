@@ -25,9 +25,10 @@ constructor layouts or compatibility-only options.
 - Refactor `AccessLogConfig`, `RequestContextConfig`, `RequestContext`, and
   `TraceContext` construction to keyword arguments; v1 positional call shapes
   are rejected.
-- Use Python-registered integer levels for access status callbacks and update
-  abnormal-record queries to use authoritative response status, standardized
-  terminal reasons, and `ERROR` severity.
+- Use Python-registered integer levels for access status callbacks. Update
+  abnormal-record queries for authoritative response status and the
+  `service_error`, `body_error`, `cancelled`, `client_disconnect`, and
+  `response_dropped` terminal reasons; every abnormal record now uses `ERROR`.
 - Custom request-ID validators apply only to caller input and may broaden it
   within the ASGI adapter's visible-ASCII response-header boundary. Generated
   IDs always retain the package baseline grammar, including after callback
@@ -38,75 +39,73 @@ constructor layouts or compatibility-only options.
 
 ### Added
 
-- Added independent `capture_path`, `capture_peer_ip`, and
-  `capture_user_agent`, and `capture_error` opt-ins.
+- Added independent `capture_path`, `capture_peer_ip`, `capture_user_agent`, and
+  `capture_error` opt-ins.
 - Added explicit W3C Trace Context Level 2 configuration, including its
   `tracestate` key grammar and `trace_id_random` projection. Level 1 remains the
   default.
+- Added a conditional consumer-image build as a packaging and integration
+  diagnostic, with Podman-first local builds and Docker fallback. Optional
+  independent audits are informational and never a publication requirement.
 
 ### Changed
 
-- Removed v1 positional-constructor and fixed-value option shims so the v2
-  surface has one explicit configuration form.
-- Set distribution and lock metadata to `2.0.0` so package validation cannot
-  produce a breaking artifact mislabeled for the v1 release line.
-- Documented LF-terminated NDJSON at the standard stream-handler boundary and
-  added raw-output regression coverage for independently parseable records.
-
-- Fold every GCP logger level into the five profile severities, accept
-  registered native access status levels, and canonicalize or omit direct peer
-  IPs.
+- Defined LF-terminated NDJSON at the standard stream-handler boundary.
+- Folded every GCP logger level into the five documented GCP severities and
+  accepted registered native access status levels.
 - Disabled concrete path, direct peer IP, and User-Agent capture by default;
   renamed the opt-in portable peer field from `remote_ip` to `peer_ip`, and
   narrowed GCP `requestUrl` to the opt-in query-free path without authority.
-- Aligned the GCP health fixture with service version `1.0.0` and added exact,
-  deterministic DEBUG and INFO route tests.
+  Direct peer IP literals are canonicalized or omitted.
 - Canonicalized retained `tracestate` field-lines without treating 512
-  characters as a maximum, and let custom request-ID validators broaden caller
-  input within the native response-header boundary.
+  characters as a maximum.
+- Let custom request-ID validators broaden caller input within the native
+  response-header boundary.
 - Treated dash-delimited future-version `traceparent` suffixes as opaque while
   retaining strict validation of the common 55-character prefix.
 - Made access status authoritative to accepted ASGI response-start messages,
-  removed synthetic 200/500 fallbacks, and added standard abnormal terminal
-  reasons with `ERROR` severity while preserving original failures.
+  removed synthetic 200/500 fallbacks, and added `service_error`, `body_error`,
+  `cancelled`, `client_disconnect`, and `response_dropped` with `ERROR` severity
+  while preserving original failures.
 - Normalized nested mapping keys before JSON encoding and retained the first
   value on a normalized-name collision, preventing duplicate raw JSON members.
-- **Breaking:** Canonicalized simple whole-segment FastAPI route converters to
+- Canonicalized simple whole-segment FastAPI route converters to
   portable `{name}` and `{*name}` templates while preserving richer
   authoritative matched templates in native syntax.
 
+### Removed
+
+- Removed v1 positional-constructor and fixed-value option shims so the v2
+  surface has one explicit configuration form.
+
 ### Fixed
 
-- Enforce exact, contextual field ownership: application extras may use
-  access-only names, exact aliases owned only by an inactive provider profile,
+- Enforced exact, contextual field ownership: application extras may use
+  access-only names, exact aliases owned only by an inactive preset,
   and unrelated names, while access callbacks cannot replace fields written by
   access enrichment.
-- Emit GCP `httpRequest.latency` with canonical ProtoJSON fractional widths:
-  0, 3, 6, or 9 digits according to the required precision.
-- Apply the RFC 9110 field-content boundary before custom request-ID validation,
-  admit internal space, tab, or a comma in one field-line, retain a native
-  direct-construction guard for edge whitespace, and classify every incomplete
-  ASGI return as `response_dropped`.
-- Preserve composite FastAPI route metadata, HTTP-safe opaque future
-  `traceparent` suffixes without an invented length cap, HTAB User-Agent values,
-  nonempty static operation IDs, and exact downstream-send disconnect
-  classification. Reject trace-level disagreement in either middleware order.
-- Preserve portable duration at the GCP protobuf boundary, format representable
-  latency without precision loss, and omit only an unrepresentable provider
-  projection.
-
-- Preserve the escaped representation of every nonempty ASGI raw-path byte
+- Emitted GCP `httpRequest.latency` with canonical ProtoJSON precision across
+  the representable range, omitting only an unrepresentable projection.
+- Applied the RFC 9110 field-content boundary before custom request-ID
+  validation, admitting internal space, tab, or a comma in one field-line while
+  retaining a direct-construction guard for edge whitespace.
+- Classified every incomplete ASGI return as `response_dropped` and preserved
+  exact downstream-send disconnect classification.
+- Preserved composite FastAPI route metadata, HTAB User-Agent values, and
+  nonempty static operation IDs at their native framework boundaries.
+- Preserved HTTP-safe opaque future `traceparent` suffixes without an invented
+  length cap and rejected trace-level disagreement in either middleware order.
+- Preserved the escaped representation of every nonempty ASGI raw-path byte
   sequence, including existing malformed percent triplets that reached
   middleware and the `*` request target.
-- Call a configured request-ID generator once, then use the package fallback
+- Called a configured request-ID generator once, then used the package fallback
   for an exception or invalid result.
-- Document and test User-Agent projection as the lossless Latin-1 mapping of
-  ASGI header bytes rather than claiming UTF-8 decoding.
+- Preserved User-Agent projection as the lossless Latin-1 mapping of ASGI header
+  bytes rather than claiming UTF-8 decoding.
 - Ignored non-encodable Python strings instead of allowing malformed
   `traceparent` input to raise `UnicodeEncodeError`.
 - Preserved sampling while omitting the Level 2 random flag for unknown future
   `traceparent` versions.
-- Rejected mismatched composed trace-level configuration.
 
 ## [1.0.1] - 2026-07-17
 

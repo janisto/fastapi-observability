@@ -69,7 +69,7 @@ handlers, and deployment policy.
 > `fastapi_request_observability`. The similarly named
 > `fastapi-observability` distribution is an unrelated project.
 
-## Installation
+## Requirements and installation
 
 ```bash
 uv add fastapi-request-observability
@@ -78,7 +78,7 @@ uv add fastapi-request-observability
 Python 3.13 or newer and FastAPI 0.130.0 or newer are supported. The Python
 compatibility window follows the latest two stable feature releases.
 
-## GCP setup
+## Complete setup
 
 When this documentation shows one configuration, it uses GCP. Complete
 runnable GCP, provider-neutral, AWS, and Azure applications are available in
@@ -200,7 +200,7 @@ higher versions deliberately omit that field.
 The incoming parent ID is not a span created by this application. No preset
 emits it as a current span ID.
 
-## Log contract
+## Structured log contract
 
 Every JSON record contains `timestamp`, `level` (`severity` on GCP), `logger`,
 and `message`. Set `include_source=True` to add source file, line, and function.
@@ -220,6 +220,8 @@ During a request, records also contain `request_id` and `correlation_id`. A
 valid W3C context adds `trace_id`, `parent_id`, `trace_flags`, and
 `trace_sampled`; configured Level 2 additionally adds `trace_id_random`.
 
+### Terminal access record
+
 The access record message is `request completed` and includes:
 
 | Field | Meaning |
@@ -238,20 +240,20 @@ The access record message is `request completed` and includes:
 The default level is `ERROR` for abnormal completion or a normal 5xx,
 `WARNING` for a normal 4xx, and `INFO` otherwise.
 Field ownership is contextual and exact. Application `extra` values cannot
-replace envelope, request-context, or selected-profile fields written by the
-formatter, but may use access-only names, exact aliases owned only by an
-inactive provider profile, and unrelated custom namespaces. Access callbacks
+replace envelope, request-context, or fields owned by the active preset, but
+may use access-only names, exact aliases owned only by an inactive preset, and
+unrelated custom namespaces. Access callbacks
 additionally cannot replace the exact fields written by access enrichment.
 
 `AccessLogConfig` also accepts independent `capture_path`, `capture_peer_ip`,
-`capture_user_agent`, and `capture_error` booleans, all defaulting to `False`; a monotonic
-`clock`; a `status_level(status)` callback; a synchronous
+`capture_user_agent`, and `capture_error` booleans, all defaulting to `False`;
+a monotonic `clock`; a `status_level(status)` callback; and a synchronous
 `extra_fields(scope)` callback. The terminal message is fixed to
-`request completed` and is not configurable. Rich errors can
-contain secrets and require an explicit privacy decision. Callback and logging
-failures use the default behavior and cannot replace the HTTP response. When
-installed without `RequestContextMiddleware`, access middleware creates
-default request context and adds `X-Request-ID` itself.
+`request completed` and is not configurable. Rich errors can contain secrets
+and require an explicit privacy decision. Callback and logging failures use the
+default behavior and cannot replace the HTTP response. When installed without
+`RequestContextMiddleware`, access middleware creates default request context
+and adds `X-Request-ID` itself.
 
 `path_template` is the default aggregation key. Opt-in `path` is useful for
 individual-request diagnostics and has unbounded cardinality. Query strings,
@@ -296,7 +298,9 @@ access_config = AccessLogConfig(
 Provider fields correlate logs only. Trace creation and export remain the
 application's responsibility.
 
-## Response and exception behavior
+## Diagnostics and failure boundaries
+
+### Response and exception behavior
 
 The middleware observes exceptions, emits once, and re-raises the original
 exception unchanged. It never synthesizes a replacement 500 response.
@@ -347,21 +351,21 @@ the final 500 response. The trade-off is that the exported `app` is an ASGI
 wrapper rather than the `FastAPI` object; retain `fastapi_app` for application
 configuration and test setup.
 
-## Streaming, concurrency, and non-HTTP scopes
+### Streaming, concurrency, and non-HTTP scopes
 
 All request state is local to a pure ASGI `__call__` and the `ContextVar` token
 is reset in `finally`. Concurrent and sequential requests cannot share package
 context. WebSocket and lifespan scopes pass through unchanged; WebSocket access
 logging is outside the package scope.
 
-## Proxy trust
+### Proxy trust
 
 Opt-in `peer_ip` comes only from the ASGI scope. The package does not parse
 `Forwarded` or `X-Forwarded-For`, because trusting those headers without a known
 proxy boundary allows spoofing. Configure the ASGI server so `scope["client"]`
 represents the intended direct peer boundary.
 
-## Compatibility
+## Compatibility and development
 
 Beginning with v1.0.0, exported APIs, configuration defaults, structured log
 fields, and supported runtime versions are compatibility contracts. Breaking
@@ -369,10 +373,9 @@ changes require a new major version, explicit changelog coverage, and migration
 guidance. The package does not configure logging at import time and does not
 claim ownership of exception responses.
 
-The current Unreleased contract changes are reserved for `2.0.0`; see the
-changelog migration section before upgrading a 1.x application. Version 2
-configuration and public value objects are keyword-only and expose no v1
-argument-order or option compatibility shims.
+Version 2 configuration and public value objects are keyword-only and expose no
+v1 argument-order or option compatibility shims. Applications upgrading from
+1.x must follow the [migration guide](CHANGELOG.md#migration-from-1x).
 
 Repository tests use HTTPX2 directly with its asynchronous ASGI transport.
 Deprecated HTTPX and FastAPI/Starlette `TestClient` are intentionally excluded.
@@ -382,7 +385,7 @@ If the package later needs to mock outbound HTTP, use `pytest-httpx2` and its
 See [EXAMPLES.md](https://github.com/janisto/fastapi-observability/blob/main/EXAMPLES.md)
 for complete configurations.
 
-## Development
+### Development
 
 Development uses [uv](https://docs.astral.sh/uv/) and
 [just](https://github.com/casey/just). On macOS, install the workflow linters:
@@ -418,6 +421,18 @@ This intentionally runs outside `just qa`. Use `uv run mutmut results` to
 list surviving mutants and `uv run mutmut show <mutant>` to inspect one. Add a
 test when a survivor exposes a contract gap; equivalent transformations do not
 need production pragmas or artificial assertions.
+
+## Consumer image
+
+Run `just e2e-image observability-e2e-local:manual` to build a
+production-shaped consumer image from the exact checkout. The recipe prefers
+Podman and falls back to Docker.
+
+Building the image verifies packaging and integration only. It does not run the
+image, validate emitted logs, compare implementations, or approve a release.
+Optional independent tooling may exercise the public contract documented in
+[`e2e/README.md`](e2e/README.md). Any audit result is informational and is never
+a publication requirement.
 
 ## References
 
