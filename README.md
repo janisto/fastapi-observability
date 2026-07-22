@@ -82,7 +82,7 @@ compatibility window follows the latest two stable feature releases.
 
 When this documentation shows one configuration, it uses GCP. Complete
 runnable GCP, provider-neutral, AWS, and Azure applications are available in
-[`examples`](examples).
+the public [`examples`](https://github.com/janisto/fastapi-observability/tree/main/examples).
 
 ```python
 import logging
@@ -375,7 +375,8 @@ claim ownership of exception responses.
 
 Version 2 configuration and public value objects are keyword-only and expose no
 v1 argument-order or option compatibility shims. Applications upgrading from
-1.x must follow the [migration guide](CHANGELOG.md#migration-from-1x).
+1.x must follow the
+[migration guide](https://github.com/janisto/fastapi-observability/blob/main/CHANGELOG.md#migration-from-1x).
 
 Repository tests use HTTPX2 directly with its asynchronous ASGI transport.
 Deprecated HTTPX and FastAPI/Starlette `TestClient` are intentionally excluded.
@@ -466,4 +467,4 @@ requirement.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/janisto/fastapi-observability/blob/main/LICENSE)
