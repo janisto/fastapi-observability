@@ -7,6 +7,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- Hardened access logging against unexpected ASGI response-status and
+  User-Agent header value types.
+
 ## [2.0.0] - 2026-07-22
 
 Version 2 intentionally does not preserve v1 positional constructor layouts or
