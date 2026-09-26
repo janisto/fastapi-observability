@@ -327,11 +327,14 @@ async def test_composed_middleware_rejects_trace_level_mismatch_in_either_order(
     request_level, access_level, request_context_outermost
 ):
     app = FastAPI()
-    access = (AccessLogMiddleware, AccessLogConfig(trace_context_level=access_level))
-    request = (RequestContextMiddleware, RequestContextConfig(trace_context_level=request_level))
-    inner, outer = (access, request) if request_context_outermost else (request, access)
-    app.add_middleware(inner[0], config=inner[1])
-    app.add_middleware(outer[0], config=outer[1])
+    access_config = AccessLogConfig(trace_context_level=access_level)
+    request_config = RequestContextConfig(trace_context_level=request_level)
+    if request_context_outermost:
+        app.add_middleware(AccessLogMiddleware, config=access_config)
+        app.add_middleware(RequestContextMiddleware, config=request_config)
+    else:
+        app.add_middleware(RequestContextMiddleware, config=request_config)
+        app.add_middleware(AccessLogMiddleware, config=access_config)
 
     @app.get("/")
     async def root():
@@ -1447,6 +1450,18 @@ async def test_registered_custom_status_level_is_preserved():
     logging.addLevelName(35, "NOTICE")
     handler = JSONCaptureHandler()
     async with asgi_client(_app(handler, status_level=lambda _status: 35)) as client:
+        response = await client.get("/items/1")
+    assert response.status_code == 200
+    assert handler.entries[0]["level"] == "NOTICE"
+
+
+async def test_registered_integer_subclass_status_level_is_preserved():
+    class CustomLoggingLevel(int):
+        pass
+
+    logging.addLevelName(35, "NOTICE")
+    handler = JSONCaptureHandler()
+    async with asgi_client(_app(handler, status_level=lambda _status: CustomLoggingLevel(35))) as client:
         response = await client.get("/items/1")
     assert response.status_code == 200
     assert handler.entries[0]["level"] == "NOTICE"

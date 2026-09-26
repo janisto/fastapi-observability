@@ -13,9 +13,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  UV_VERSION: "0.11.28"
+  UV_VERSION: "0.12.19"
+  JUST_VERSION: "1.58.0"
+  PYTHON_VERSION: "3.14"
+  PYTHON_VERSION_MIN: "3.13"
 
-jobs:
+jobs: 
   quality:
     name: Quality
     runs-on: ubuntu-latest
@@ -28,7 +31,7 @@ jobs:
         uses: astral-sh/setup-uv@v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
-          python-version: "3.14"
+          python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - run: uv sync --locked
       - run: uv run ruff check
@@ -36,11 +39,13 @@ jobs:
       - run: uv run ty check
 
   test:
+    needs: quality
     name: Test Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        # Note: Keep synced with env.PYTHON_VERSION* (matrix parser limitation)
         python-version: ["3.13", "3.14"]
     steps:
       - name: Check out repository
@@ -57,6 +62,7 @@ jobs:
       - run: uv run -m pytest -v --cov=fastapi_request_observability --cov-branch
 
   minimum-fastapi:
+    needs: quality
     name: Minimum FastAPI
     runs-on: ubuntu-latest
     steps:
@@ -68,7 +74,7 @@ jobs:
         uses: astral-sh/setup-uv@v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
-          python-version: "3.13"
+          python-version: ${{ env.PYTHON_VERSION_MIN }}
           enable-cache: true
       - name: Test declared FastAPI floor
         run: >-
@@ -77,6 +83,7 @@ jobs:
           -m pytest -v --cov=fastapi_request_observability --cov-branch
 
   build:
+    needs: quality
     name: Build distributions
     runs-on: ubuntu-latest
     steps:
@@ -88,7 +95,7 @@ jobs:
         uses: astral-sh/setup-uv@v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
-          python-version: "3.14"
+          python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - run: uv build --no-sources
       - name: Inspect distribution contents
@@ -99,6 +106,7 @@ jobs:
         run: uv run --isolated --no-project --with dist/*.tar.gz tests/smoke_test.py
 
   e2e-image:
+    needs: quality
     name: Consumer image build
     if: >-
       github.event_name == 'pull_request' &&
@@ -114,5 +122,7 @@ jobs:
           persist-credentials: false
       - name: Install just
         uses: extractions/setup-just@v4.0.0
+        with:
+          just-version: ${{ env.JUST_VERSION }}
       - name: Build consumer image
         run: just e2e-image observability-e2e-local:ci
