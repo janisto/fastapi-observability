@@ -181,7 +181,9 @@ class AccessLogMiddleware:
                 downstream_disconnect = error
                 raise
             if message["type"] == "http.response.start":
-                status = message["status"]
+                status_value = message["status"]
+                if isinstance(status_value, int):
+                    status = status_value
                 trailers_pending = bool(message.get("trailers", False))
             if message["type"] == "http.response.body" and not message.get("more_body", False) and not trailers_pending:
                 emit()
@@ -220,8 +222,7 @@ def _status_level(
         except Exception as error:  # noqa: BLE001 - application callbacks are untrusted
             _diagnostic("access status-level callback failed", error)
         else:
-            level_name = logging.getLevelName(level) if isinstance(level, int) and not isinstance(level, bool) else None
-            if isinstance(level_name, str) and not level_name.startswith("Level "):
+            if _registered_logging_level_name(level) is not None:
                 return level
             _diagnostic(
                 "access status-level callback failed",
@@ -232,6 +233,15 @@ def _status_level(
     if status >= _CLIENT_ERROR_STATUS:
         return logging.WARNING
     return logging.INFO
+
+
+def _registered_logging_level_name(level: object) -> str | None:
+    if not isinstance(level, int) or isinstance(level, bool):
+        return None
+    level_name = logging.getLevelName(level)
+    if not level_name.startswith("Level "):
+        return level_name
+    return None
 
 
 def _terminal_reason(
@@ -372,19 +382,21 @@ def _canonical_peer_ip(value: object) -> str | None:
 
 def _single_valid_header(scope: _Scope, name: str) -> str | None:
     target = name.encode("latin-1")
-    values = [value.decode("latin-1") for key, value in scope.get("headers", []) if key.lower() == target]
-    if (
-        len(values) != 1
-        or not values[0]
-        or values[0][0] in " \t"
-        or values[0][-1] in " \t"
-        or any(
-            (ord(character) < _FIRST_CONTROL_CODEPOINT and character != "\t") or ord(character) == _DELETE_CODEPOINT
-            for character in values[0]
-        )
+    values: list[str] = []
+    for key, value in scope.get("headers", []):
+        if isinstance(key, (bytes, bytearray)) and isinstance(value, (bytes, bytearray)) and key.lower() == target:
+            values.append(value.decode("latin-1"))
+    if len(values) != 1:
+        return None
+    candidate = values[0]
+    if not candidate or candidate[0] in " \t" or candidate[-1] in " \t":
+        return None
+    if any(
+        (ord(character) < _FIRST_CONTROL_CODEPOINT and character != "\t") or ord(character) == _DELETE_CODEPOINT
+        for character in candidate
     ):
         return None
-    return values[0]
+    return candidate
 
 
 def _protobuf_duration(duration_ms: float) -> str | None:

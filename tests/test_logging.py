@@ -119,7 +119,7 @@ def test_default_formatter_omits_opt_in_source_field():
 
 @pytest.mark.parametrize("level", [logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR, logging.CRITICAL])
 def test_level_names(level):
-    assert json.loads(JSONFormatter().format(_record(level)))["level"] == logging.getLevelName(level)
+    assert json.loads(JSONFormatter().format(_record(level)))["level"] == logging.getLevelName(int(level))
 
 
 @pytest.mark.parametrize(
