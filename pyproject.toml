@@ -38,7 +38,7 @@ Issues = "https://github.com/janisto/fastapi-observability/issues"
 Changelog = "https://github.com/janisto/fastapi-observability/blob/main/CHANGELOG.md"
 
 [build-system]
-requires = ["uv_build>=0.11.28,<0.12"]
+requires = ["uv_build>=0.12,<0.13"]
 build-backend = "uv_build"
 
 [dependency-groups]
@@ -61,6 +61,7 @@ target-version = "py313"
 select = ["ALL"]
 ignore = [
     "COM812", # Conflicts with the Ruff formatter.
+    "CPY001", # Missing copyright notice at top of file.
     "E501",   # Line length is owned by the Ruff formatter.
     "EM101",  # Inline exception messages are clearer for validation failures.
     "EM102",  # Inline formatted exception messages preserve local context.
@@ -101,9 +102,6 @@ fail_under = 90
 
 [tool.ty.src]
 include = ["examples", "src", "tests"]
-
-[tool.ty.analysis]
-strict-literal-narrowing = true
 
 [tool.ty.environment]
 python-platform = "all"

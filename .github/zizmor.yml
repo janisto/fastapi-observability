@@ -8,3 +8,6 @@ rules:
       # Repository policy requires full release tags.
       policies:
         "*": ref-pin
+  unpinned-tools:
+    # Disabled: zizmor cannot resolve tool versions pinned via global env variables (e.g., ${{ env.JUST_VERSION }}).
+    disable: true
